@@ -76,13 +76,18 @@ Create this file at `.conductor/workpad.md` at the start of every run:
 
 ## Step 4 — PR and handoff
 
-1. Push branch and open a PR targeting `main`:
-   `gh pr create --title "..." --body "..." --repo <owner/repo>`
-2. Attach the PR to the issue.
-3. Poll PR checks — loop until green or until a failure requires a code fix.
-4. Run a PR feedback sweep (inline comments + review summaries); address or
+1. Push branch and open a PR targeting `main`. Include `Closes #<issue-number>`
+   in the PR body (the issue number is in the task header above):
+   `gh pr create --title "..." --body "Closes #N\n\n..." --repo <owner/repo>`
+2. Capture the PR URL and write it to `.conductor/metadata.json`:
+   ```json
+   {"pr_url": "https://github.com/org/repo/pull/N"}
+   ```
+3. Attach the PR to the issue.
+4. Poll PR checks — loop until green or until a failure requires a code fix.
+5. Run a PR feedback sweep (inline comments + review summaries); address or
    explicitly respond to every actionable comment.
-5. Move issue to **Human Review**.
+6. Move issue to **Human Review**.
 
 ## Step 5 — Rework (if returned)
 
