@@ -260,6 +260,11 @@ func buildTaskPrompt(task *domain.Task, workflow string) []byte {
 	if task.SourceURL != "" {
 		fmt.Fprintf(&b, "**Source:** %s\n", task.SourceURL)
 	}
+	if task.Source == "github" {
+		if n := githubIssueNumber(task.SourceURL); n != "" {
+			fmt.Fprintf(&b, "**Issue number:** %s (use `Closes #%s` in the PR description)\n", n, n)
+		}
+	}
 	if len(task.Labels) > 0 {
 		fmt.Fprintf(&b, "**Labels:** %s\n", strings.Join(task.Labels, ", "))
 	}
@@ -267,4 +272,14 @@ func buildTaskPrompt(task *domain.Task, workflow string) []byte {
 	b.WriteString(task.Description)
 	b.WriteString("\n")
 	return []byte(b.String())
+}
+
+// githubIssueNumber extracts the issue number from a GitHub issue URL.
+// e.g. "https://github.com/org/repo/issues/42" -> "42"
+func githubIssueNumber(sourceURL string) string {
+	parts := strings.Split(sourceURL, "/issues/")
+	if len(parts) == 2 && parts[1] != "" {
+		return strings.TrimRight(parts[1], "/")
+	}
+	return ""
 }

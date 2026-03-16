@@ -65,13 +65,39 @@ func (c *Collector) Collect(ctx context.Context, run *domain.Run, task *domain.T
 		bundle.DurationSeconds = time.Since(started).Seconds()
 	}
 
-	// 4. Write summary.json.
+	// 4. Merge agent-written metadata (pr_url, walkthrough, etc.).
+	readAgentMetadata(run.WorktreePath, bundle)
+
+	// 5. Write summary.json.
 	summaryPath := filepath.Join(run.WorktreePath, "proof", "summary.json")
 	if err := writeSummary(summaryPath, bundle); err != nil {
 		return nil, fmt.Errorf("write summary: %w", err)
 	}
 
 	return bundle, nil
+}
+
+// readAgentMetadata merges fields from .conductor/metadata.json (written by the
+// agent) into bundle. Unknown fields are ignored; missing file is not an error.
+func readAgentMetadata(worktreePath string, bundle *domain.ProofBundle) {
+	path := filepath.Join(worktreePath, ".conductor", "metadata.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var meta struct {
+		PRUrl       string `json:"pr_url"`
+		Walkthrough string `json:"walkthrough"`
+	}
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return
+	}
+	if meta.PRUrl != "" {
+		bundle.PRUrl = meta.PRUrl
+	}
+	if meta.Walkthrough != "" {
+		bundle.Walkthrough = meta.Walkthrough
+	}
 }
 
 // runCI executes the test suite in the worktree directory.
@@ -102,8 +128,24 @@ func (c *Collector) runCI(ctx context.Context, dir string) (domain.CIResult, err
 
 // diffStats returns line-count statistics comparing the worktree HEAD to baseBranch.
 func (c *Collector) diffStats(dir, baseBranch string) (domain.DiffStat, error) {
-	// git diff --shortstat <base>...HEAD
-	cmd := exec.Command("git", "diff", "--shortstat", baseBranch+"...HEAD")
+	// Find the common ancestor explicitly — more reliable in detached worktrees
+	// than the three-dot syntax.
+	baseRef := "origin/" + baseBranch
+	mbCmd := exec.Command("git", "merge-base", "HEAD", baseRef)
+	mbCmd.Dir = dir
+	mergeBase, err := mbCmd.Output()
+	if err != nil {
+		// Fall back to the local branch name.
+		mbCmd2 := exec.Command("git", "merge-base", "HEAD", baseBranch)
+		mbCmd2.Dir = dir
+		mergeBase, err = mbCmd2.Output()
+		if err != nil {
+			return domain.DiffStat{}, fmt.Errorf("git merge-base: %w", err)
+		}
+	}
+	base := strings.TrimSpace(string(mergeBase))
+
+	cmd := exec.Command("git", "diff", "--shortstat", base, "HEAD")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
