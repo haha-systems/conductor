@@ -32,27 +32,42 @@ func (a *shellAdapter) adapterCostEstimate(promptLen int) (float64, bool) {
 }
 
 func (a *shellAdapter) adapterRun(ctx context.Context, rc RunContext, prependArgs ...string) (RunHandle, error) {
+	return a.adapterRunWithStdin(ctx, rc, nil, prependArgs...)
+}
+
+func (a *shellAdapter) adapterRunWithStdin(ctx context.Context, rc RunContext, stdin *os.File, prependArgs ...string) (RunHandle, error) {
 	args := append(prependArgs, a.extraArgs...)
 
 	cmd := exec.CommandContext(ctx, a.binary, args...)
 	cmd.Dir = rc.RepoPath
 	cmd.Env = buildEnv(rc)
+	cmd.Stdin = stdin
 	cmd.Stdout = rc.LogWriter
 	cmd.Stderr = rc.LogWriter
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
+		if stdin != nil {
+			stdin.Close()
+		}
 		return nil, fmt.Errorf("%s: start: %w", a.name, err)
 	}
-	return &processHandle{cmd: cmd}, nil
+	return &processHandle{cmd: cmd, stdin: stdin}, nil
 }
 
 // processHandle implements RunHandle for an os/exec.Cmd.
 type processHandle struct {
-	cmd *exec.Cmd
+	cmd   *exec.Cmd
+	stdin *os.File // closed after Wait if non-nil
 }
 
-func (h *processHandle) Wait() error { return h.cmd.Wait() }
+func (h *processHandle) Wait() error {
+	err := h.cmd.Wait()
+	if h.stdin != nil {
+		h.stdin.Close()
+	}
+	return err
+}
 
 // Cancel sends SIGTERM to the process group, then schedules SIGKILL after a
 // grace period. It does NOT call Wait — the caller owns exactly one Wait call.

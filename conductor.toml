@@ -10,7 +10,7 @@ label_filter = ["conductor"]
 [providers.claude]
 enabled = true
 binary = "claude"
-extra_args = ["--model", "claude-sonnet-4-6"]
+extra_args = ["--model", "claude-sonnet-4-6", "--dangerously-skip-permissions"]
 cost_per_1k_tokens = 0.003
 
 [routing]
@@ -18,11 +18,10 @@ strategy = "round-robin"
 
 [proof]
 require_ci_pass = true
-open_pr = true
 pr_base_branch = "main"
-safe_land = true
 
 [sandbox]
 worktree_dir = ".conductor/runs"
 timeout_minutes = 45
 preserve_on_failure = true
+workflow_file = ".conductor/WORKFLOW.md"

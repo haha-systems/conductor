@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/haha-systems/conductor/internal/domain"
@@ -33,8 +34,10 @@ type Config struct {
 	WorktreeBaseDir   string
 	TimeoutMinutes    int
 	PreserveOnFailure bool
-	// RepoRoot is the root of the git repository.
-	RepoRoot string
+	RepoRoot          string
+	// WorkflowFile is the path (relative to RepoRoot) of the workflow markdown
+	// to prepend to every task prompt. Silently skipped if the file is absent.
+	WorkflowFile string
 }
 
 // Supervisor manages the lifecycle of a single run.
@@ -64,7 +67,8 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 
 	// 2. Write task prompt to file.
 	taskFile := filepath.Join(worktreePath, ".conductor-task.md")
-	if err := os.WriteFile(taskFile, []byte(req.Task.Description), 0600); err != nil {
+	prompt := buildTaskPrompt(req.Task, s.loadWorkflow())
+	if err := os.WriteFile(taskFile, prompt, 0600); err != nil {
 		s.cleanup(run)
 		return s.fail(run, fmt.Errorf("write task file: %w", err))
 	}
@@ -227,4 +231,40 @@ func taskEnv(task *domain.Task) map[string]string {
 		return nil
 	}
 	return task.Config.Env
+}
+
+// loadWorkflow reads the workflow file from the repo root. Returns empty string
+// if the file is absent or unreadable — callers treat that as no workflow.
+func (s *Supervisor) loadWorkflow() string {
+	if s.cfg.WorkflowFile == "" {
+		return ""
+	}
+	path := filepath.Join(s.cfg.RepoRoot, s.cfg.WorkflowFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "" // silently skip missing workflow file
+	}
+	return string(data)
+}
+
+// buildTaskPrompt formats a task into a structured prompt for the agent.
+// If workflow is non-empty it is prepended so the agent sees operating
+// instructions before the task-specific content.
+func buildTaskPrompt(task *domain.Task, workflow string) []byte {
+	var b strings.Builder
+	if workflow != "" {
+		b.WriteString(workflow)
+		b.WriteString("\n\n---\n\n")
+	}
+	fmt.Fprintf(&b, "# Task: %s\n\n", task.Title)
+	if task.SourceURL != "" {
+		fmt.Fprintf(&b, "**Source:** %s\n", task.SourceURL)
+	}
+	if len(task.Labels) > 0 {
+		fmt.Fprintf(&b, "**Labels:** %s\n", strings.Join(task.Labels, ", "))
+	}
+	b.WriteString("\n## Description\n\n")
+	b.WriteString(task.Description)
+	b.WriteString("\n")
+	return []byte(b.String())
 }

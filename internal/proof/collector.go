@@ -18,7 +18,6 @@ import (
 // Config controls what proof collection does.
 type Config struct {
 	RequireCIPass bool
-	OpenPR        bool
 	PRBaseBranch  string
 	// CICommand is the command to run tests (default: inferred from repo).
 	CICommand []string

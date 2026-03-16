@@ -67,9 +67,7 @@ strategy = "round-robin"
 
 [proof]
 require_ci_pass = true
-open_pr = true
 pr_base_branch = "main"
-safe_land = true
 
 [sandbox]
 worktree_dir = ".conductor/runs"
@@ -99,8 +97,8 @@ preserve_on_failure = true
 	if cfg.Routing.LabelRoutes["big-context"] != "gemini" {
 		t.Errorf("unexpected label route: %v", cfg.Routing.LabelRoutes)
 	}
-	if !cfg.Proof.SafeLand {
-		t.Error("expected safe_land=true")
+	if cfg.Proof.PRBaseBranch != "main" {
+		t.Errorf("unexpected pr_base_branch: %s", cfg.Proof.PRBaseBranch)
 	}
 }
 

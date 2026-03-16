@@ -53,15 +53,14 @@ type RoutingConfig struct {
 
 type ProofConfig struct {
 	RequireCIPass bool   `toml:"require_ci_pass"`
-	OpenPR        bool   `toml:"open_pr"`
 	PRBaseBranch  string `toml:"pr_base_branch"`
-	SafeLand      bool   `toml:"safe_land"`
 }
 
 type SandboxConfig struct {
 	WorktreeDir       string `toml:"worktree_dir"`
 	TimeoutMinutes    int    `toml:"timeout_minutes"`
 	PreserveOnFailure bool   `toml:"preserve_on_failure"`
+	WorkflowFile      string `toml:"workflow_file"`
 }
 
 // Load reads and parses a conductor.toml file, applying defaults.
@@ -102,6 +101,7 @@ func defaults() *Config {
 			WorktreeDir:       ".conductor/runs",
 			TimeoutMinutes:    45,
 			PreserveOnFailure: true,
+			WorkflowFile:      ".conductor/WORKFLOW.md",
 		},
 		Providers: map[string]ProviderConfig{},
 	}
