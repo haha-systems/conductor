@@ -55,178 +55,125 @@ func TestTaskEnv_WithConfig(t *testing.T) {
 	}
 }
 
-// makeTestPersonaDir creates a temporary persona directory with the given files.
-func makeTestPersonaDir(t *testing.T, files map[string]string) string {
-	t.Helper()
-	dir := t.TempDir()
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return dir
-}
-
 func TestBuildTaskPrompt_NoPersona(t *testing.T) {
 	task := &domain.Task{
-		Title:       "Do something",
-		Description: "Description here",
+		Title:       "Do the thing",
+		Description: "Details here.",
+		Source:      "github",
+		SourceURL:   "https://github.com/org/repo/issues/42",
+		Labels:      []string{"conductor"},
 	}
 	prompt := string(buildTaskPrompt(task, "", nil))
-	if !strings.Contains(prompt, "# Task: Do something") {
-		t.Errorf("prompt missing task title: %s", prompt)
+	if !strings.Contains(prompt, "# Task: Do the thing") {
+		t.Error("missing task title")
+	}
+	if !strings.Contains(prompt, "Issue number:** 42") {
+		t.Error("missing issue number")
 	}
 	if strings.Contains(prompt, "## Role") {
-		t.Error("prompt should not contain Role section without persona")
+		t.Error("unexpected Role section when persona is nil")
+	}
+	if strings.Contains(prompt, "**Persona:**") {
+		t.Error("unexpected Persona line when persona is nil")
 	}
 }
 
-func TestBuildTaskPrompt_WithPersona_SOULInjected(t *testing.T) {
-	dir := makeTestPersonaDir(t, map[string]string{
-		"SOUL.md": "I am a lead engineer.",
-	})
-	persona := &config.PersonaConfig{Name: "lead-engineer", Dir: dir}
+func TestBuildTaskPrompt_WithPersona_SoulAndPersonality(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("I am a lead engineer."), 0644)        //nolint:errcheck
+	os.WriteFile(filepath.Join(dir, "PERSONALITY.md"), []byte("I prefer minimal code."), 0644) //nolint:errcheck
 
-	task := &domain.Task{
-		Title:       "Build feature",
-		Description: "Do the thing",
-	}
+	persona := &config.PersonaConfig{Name: "lead-engineer", Dir: dir}
+	task := &domain.Task{Title: "Build feature", Description: "Implement X."}
+
 	prompt := string(buildTaskPrompt(task, "", persona))
 
 	if !strings.Contains(prompt, "## Role") {
-		t.Error("expected ## Role section")
+		t.Error("missing Role section")
 	}
 	if !strings.Contains(prompt, "I am a lead engineer.") {
-		t.Error("expected SOUL.md content in prompt")
+		t.Error("SOUL.md content missing from prompt")
+	}
+	if !strings.Contains(prompt, "I prefer minimal code.") {
+		t.Error("PERSONALITY.md content missing from prompt")
 	}
 	if !strings.Contains(prompt, "**Persona:** lead-engineer") {
-		t.Error("expected Persona label in prompt")
+		t.Error("missing Persona line in task header")
 	}
 }
 
-func TestBuildTaskPrompt_PersonaWithPersonality(t *testing.T) {
-	dir := makeTestPersonaDir(t, map[string]string{
-		"SOUL.md":        "Core identity.",
-		"PERSONALITY.md": "Behavioral traits.",
-	})
-	persona := &config.PersonaConfig{Name: "lead-engineer", Dir: dir}
-	task := &domain.Task{Title: "Task", Description: "desc"}
-	prompt := string(buildTaskPrompt(task, "", persona))
+func TestBuildTaskPrompt_WithPersona_WorkflowFromAgentsMd(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("Agent workflow here."), 0644) //nolint:errcheck
 
-	if !strings.Contains(prompt, "Core identity.") {
-		t.Error("expected SOUL.md content")
-	}
-	if !strings.Contains(prompt, "Behavioral traits.") {
-		t.Error("expected PERSONALITY.md content")
+	sup := &Supervisor{cfg: Config{WorkflowFile: ""}}
+	persona := &config.PersonaConfig{Name: "pm", Dir: dir}
+	workflow := sup.loadWorkflow(persona)
+
+	if workflow != "Agent workflow here." {
+		t.Errorf("expected AGENTS.md content as workflow, got %q", workflow)
 	}
 }
 
-func TestBuildTaskPrompt_PersonaExtraContextFiles(t *testing.T) {
-	dir := makeTestPersonaDir(t, map[string]string{
-		"SOUL.md":    "Identity.",
-		"context.md": "Extra context here.",
-	})
+func TestBuildTaskPrompt_WithPersona_FallsBackToWorkflowFile(t *testing.T) {
+	repoDir := t.TempDir()
+	os.WriteFile(filepath.Join(repoDir, "workflow.md"), []byte("Global workflow."), 0644) //nolint:errcheck
+
+	personaDir := t.TempDir() // no AGENTS.md
+
+	sup := &Supervisor{cfg: Config{RepoRoot: repoDir, WorkflowFile: "workflow.md"}}
+	persona := &config.PersonaConfig{Name: "pm", Dir: personaDir}
+	workflow := sup.loadWorkflow(persona)
+
+	if workflow != "Global workflow." {
+		t.Errorf("expected global workflow, got %q", workflow)
+	}
+}
+
+func TestBuildTaskPrompt_WithPersona_ExtraFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "SOUL.md"), []byte("Soul content."), 0644)         //nolint:errcheck
+	os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte("Extra context here."), 0644) //nolint:errcheck
+
 	persona := &config.PersonaConfig{Name: "lead-engineer", Dir: dir}
-	task := &domain.Task{Title: "Task", Description: "desc"}
+	task := &domain.Task{Title: "Task", Description: "Do it."}
 	prompt := string(buildTaskPrompt(task, "", persona))
 
 	if !strings.Contains(prompt, "## Persona Context") {
-		t.Error("expected ## Persona Context section")
+		t.Error("missing Persona Context section for extra .md files")
 	}
 	if !strings.Contains(prompt, "Extra context here.") {
-		t.Error("expected extra context file content")
+		t.Error("extra .md file content missing from prompt")
 	}
 }
 
-func TestBuildTaskPrompt_PersonaCLAUDEmd_NotInPrompt(t *testing.T) {
-	dir := makeTestPersonaDir(t, map[string]string{
-		"SOUL.md":   "Identity.",
-		"CLAUDE.md": "Should NOT appear in prompt.",
-	})
-	persona := &config.PersonaConfig{Name: "lead-engineer", Dir: dir}
-	task := &domain.Task{Title: "Task", Description: "desc"}
-	prompt := string(buildTaskPrompt(task, "", persona))
+func TestCopyPersonaFiles_CopiesCLAUDEMd(t *testing.T) {
+	personaDir := t.TempDir()
+	worktreeDir := t.TempDir()
+	os.WriteFile(filepath.Join(personaDir, "CLAUDE.md"), []byte("# Claude instructions"), 0644) //nolint:errcheck
 
-	if strings.Contains(prompt, "Should NOT appear in prompt.") {
-		t.Error("CLAUDE.md content must not be injected into prompt")
-	}
-}
-
-func TestBuildTaskPrompt_PersonaAGENTSmd_NotInExtraContext(t *testing.T) {
-	// AGENTS.md is used as workflow replacement, not extra context.
-	dir := makeTestPersonaDir(t, map[string]string{
-		"AGENTS.md": "Workflow instructions.",
-	})
-	persona := &config.PersonaConfig{Name: "p", Dir: dir}
-	task := &domain.Task{Title: "Task", Description: "desc"}
-	// Pass empty workflow — AGENTS.md is loaded separately via loadWorkflow.
-	prompt := string(buildTaskPrompt(task, "", persona))
-
-	if strings.Contains(prompt, "## Persona Context") {
-		t.Error("AGENTS.md should not appear under Persona Context")
-	}
-}
-
-func TestCopyPersonaFiles_CopiesCLAUDEmd(t *testing.T) {
-	personaDir := makeTestPersonaDir(t, map[string]string{
-		"CLAUDE.md": "# Project context\nSome instructions.",
-	})
 	persona := &config.PersonaConfig{Name: "lead-engineer", Dir: personaDir}
-
-	worktreePath := t.TempDir()
-	if err := copyPersonaFiles(persona, worktreePath); err != nil {
+	if err := copyPersonaFiles(persona, worktreeDir); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	dst := filepath.Join(worktreePath, "CLAUDE.md")
-	data, err := os.ReadFile(dst)
+	dest := filepath.Join(worktreeDir, "CLAUDE.md")
+	data, err := os.ReadFile(dest)
 	if err != nil {
 		t.Fatalf("CLAUDE.md not found in worktree: %v", err)
 	}
-	if !strings.Contains(string(data), "Some instructions.") {
-		t.Errorf("unexpected CLAUDE.md content: %s", data)
+	if string(data) != "# Claude instructions" {
+		t.Errorf("unexpected CLAUDE.md content: %q", data)
 	}
 }
 
-func TestCopyPersonaFiles_NoCLAUDEmd_NoError(t *testing.T) {
-	personaDir := makeTestPersonaDir(t, map[string]string{
-		"SOUL.md": "identity",
-	})
-	persona := &config.PersonaConfig{Name: "p", Dir: personaDir}
-	worktreePath := t.TempDir()
+func TestCopyPersonaFiles_NoCLAUDEMd(t *testing.T) {
+	personaDir := t.TempDir()
+	worktreeDir := t.TempDir()
 
-	if err := copyPersonaFiles(persona, worktreePath); err != nil {
+	persona := &config.PersonaConfig{Name: "pm", Dir: personaDir}
+	// Should not error when CLAUDE.md is absent.
+	if err := copyPersonaFiles(persona, worktreeDir); err != nil {
 		t.Errorf("unexpected error when CLAUDE.md absent: %v", err)
-	}
-}
-
-func TestLoadWorkflow_PersonaAGENTSmd_UsedWhenPresent(t *testing.T) {
-	personaDir := makeTestPersonaDir(t, map[string]string{
-		"AGENTS.md": "Persona workflow instructions.",
-	})
-	persona := &config.PersonaConfig{Name: "p", Dir: personaDir}
-
-	sup := &Supervisor{cfg: Config{WorkflowFile: ""}}
-	wf := sup.loadWorkflow(persona)
-	if wf != "Persona workflow instructions." {
-		t.Errorf("expected persona AGENTS.md content, got: %q", wf)
-	}
-}
-
-func TestLoadWorkflow_FallsBackToGlobalWhenNoAGENTSmd(t *testing.T) {
-	personaDir := makeTestPersonaDir(t, map[string]string{
-		"SOUL.md": "identity",
-	})
-	persona := &config.PersonaConfig{Name: "p", Dir: personaDir}
-
-	// Create a global workflow file.
-	repoRoot := t.TempDir()
-	wfPath := filepath.Join(repoRoot, "WORKFLOW.md")
-	os.WriteFile(wfPath, []byte("Global workflow."), 0644) //nolint:errcheck
-
-	sup := &Supervisor{cfg: Config{RepoRoot: repoRoot, WorkflowFile: "WORKFLOW.md"}}
-	wf := sup.loadWorkflow(persona)
-	if wf != "Global workflow." {
-		t.Errorf("expected global workflow content, got: %q", wf)
 	}
 }

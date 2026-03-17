@@ -23,7 +23,7 @@ type RunRequest struct {
 	Provider provider.AgentProvider
 	// GlobalEnv are extra env vars from conductor.toml [sandbox].
 	GlobalEnv map[string]string
-	// Persona is the resolved persona for this run, or nil.
+	// Persona is the resolved persona for this run, or nil if none.
 	Persona *config.PersonaConfig
 }
 
@@ -69,7 +69,7 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 		return s.fail(run, fmt.Errorf("create worktree: %w", err))
 	}
 
-	// 2. Copy persona files (e.g. CLAUDE.md) to worktree root, if a persona is active.
+	// 2. Copy persona files (e.g. CLAUDE.md) into the worktree root if a persona is set.
 	if req.Persona != nil {
 		if err := copyPersonaFiles(req.Persona, worktreePath); err != nil {
 			s.cleanup(run)
@@ -246,8 +246,9 @@ func taskEnv(task *domain.Task) map[string]string {
 	return task.Config.Env
 }
 
-// loadWorkflow reads the workflow content. If a persona is active and has an
-// AGENTS.md file, that is used in place of the global workflow_file.
+// loadWorkflow reads the workflow content. If a persona is provided and has
+// an AGENTS.md file, that file is used instead of sandbox.workflow_file.
+// Returns empty string if no workflow is available.
 func (s *Supervisor) loadWorkflow(persona *config.PersonaConfig) string {
 	if persona != nil {
 		agentsPath := filepath.Join(persona.Dir, "AGENTS.md")
@@ -255,7 +256,6 @@ func (s *Supervisor) loadWorkflow(persona *config.PersonaConfig) string {
 			return string(data)
 		}
 	}
-
 	if s.cfg.WorkflowFile == "" {
 		return ""
 	}
@@ -267,10 +267,25 @@ func (s *Supervisor) loadWorkflow(persona *config.PersonaConfig) string {
 	return string(data)
 }
 
+// copyPersonaFiles copies special persona files to the worktree root.
+// Currently copies CLAUDE.md so the claude CLI picks it up automatically.
+func copyPersonaFiles(persona *config.PersonaConfig, worktreePath string) error {
+	claudePath := filepath.Join(persona.Dir, "CLAUDE.md")
+	data, err := os.ReadFile(claudePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // CLAUDE.md is optional
+		}
+		return fmt.Errorf("reading CLAUDE.md: %w", err)
+	}
+	dest := filepath.Join(worktreePath, "CLAUDE.md")
+	return os.WriteFile(dest, data, 0644)
+}
+
 // buildTaskPrompt formats a task into a structured prompt for the agent.
-// If workflow is non-empty it is prepended so the agent sees operating
-// instructions before the task-specific content.
-// If persona is non-nil, a Role section and additional context are injected.
+// If workflow is non-empty it is prepended. If persona is non-nil, a Role
+// section is injected from SOUL.md and PERSONALITY.md, and any additional
+// .md files are included under a Persona Context heading.
 func buildTaskPrompt(task *domain.Task, workflow string, persona *config.PersonaConfig) []byte {
 	var b strings.Builder
 	if workflow != "" {
@@ -279,7 +294,37 @@ func buildTaskPrompt(task *domain.Task, workflow string, persona *config.Persona
 	}
 
 	if persona != nil {
-		writePersonaRole(&b, persona)
+		// Inject Role section from SOUL.md and optionally PERSONALITY.md.
+		soulPath := filepath.Join(persona.Dir, "SOUL.md")
+		if soul, err := os.ReadFile(soulPath); err == nil {
+			b.WriteString("## Role\n\n")
+			b.WriteString(string(soul))
+			b.WriteString("\n")
+
+			personalityPath := filepath.Join(persona.Dir, "PERSONALITY.md")
+			if personality, err := os.ReadFile(personalityPath); err == nil {
+				b.WriteString("\n")
+				b.WriteString(string(personality))
+				b.WriteString("\n")
+			}
+
+			b.WriteString("\n---\n\n")
+		}
+
+		// Inject additional .md files under Persona Context.
+		extras := personaExtraFiles(persona)
+		if len(extras) > 0 {
+			b.WriteString("## Persona Context\n\n")
+			for _, name := range extras {
+				data, err := os.ReadFile(filepath.Join(persona.Dir, name))
+				if err != nil {
+					continue
+				}
+				b.WriteString(string(data))
+				b.WriteString("\n")
+			}
+			b.WriteString("\n---\n\n")
+		}
 	}
 
 	fmt.Fprintf(&b, "# Task: %s\n\n", task.Title)
@@ -303,96 +348,32 @@ func buildTaskPrompt(task *domain.Task, workflow string, persona *config.Persona
 	return []byte(b.String())
 }
 
-// writePersonaRole injects the SOUL.md, PERSONALITY.md, and additional .md
-// context files from the persona directory into the prompt builder.
-func writePersonaRole(b *strings.Builder, persona *config.PersonaConfig) {
-	soul := readPersonaFile(persona.Dir, "SOUL.md")
-	personality := readPersonaFile(persona.Dir, "PERSONALITY.md")
-
-	if soul != "" || personality != "" {
-		b.WriteString("## Role\n\n")
-		if soul != "" {
-			b.WriteString(soul)
-			b.WriteString("\n")
-		}
-		if personality != "" {
-			b.WriteString("\n")
-			b.WriteString(personality)
-			b.WriteString("\n")
-		}
-		b.WriteString("\n---\n\n")
-	}
-
-	// Include any other .md files (excluding known special files).
-	extras := extraPersonaMDFiles(persona.Dir)
-	if len(extras) > 0 {
-		b.WriteString("## Persona Context\n\n")
-		for _, name := range extras {
-			content := readPersonaFile(persona.Dir, name)
-			if content != "" {
-				fmt.Fprintf(b, "### %s\n\n%s\n\n", name, content)
-			}
-		}
-		b.WriteString("---\n\n")
-	}
-}
-
-// readPersonaFile reads a file from the persona directory. Returns empty string
-// if the file is absent.
-func readPersonaFile(dir, name string) string {
-	data, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
-// extraPersonaMDFiles returns sorted names of .md files in the persona directory
-// that are not one of the known special files.
-func extraPersonaMDFiles(dir string) []string {
-	skip := map[string]bool{
+// personaExtraFiles returns sorted names of .md files in the persona directory
+// that are not SOUL.md, PERSONALITY.md, CLAUDE.md, or AGENTS.md.
+func personaExtraFiles(persona *config.PersonaConfig) []string {
+	known := map[string]bool{
 		"SOUL.md":        true,
 		"PERSONALITY.md": true,
 		"CLAUDE.md":      true,
 		"AGENTS.md":      true,
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(persona.Dir)
 	if err != nil {
 		return nil
 	}
-	var names []string
+	var extras []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if strings.HasSuffix(name, ".md") && !skip[name] {
-			names = append(names, name)
+		if !strings.HasSuffix(name, ".md") || known[name] {
+			continue
 		}
+		extras = append(extras, name)
 	}
-	sort.Strings(names)
-	return names
-}
-
-// copyPersonaFiles copies special non-prompt files from the persona directory
-// to the worktree root. Currently copies CLAUDE.md if present.
-func copyPersonaFiles(persona *config.PersonaConfig, worktreePath string) error {
-	filesToCopy := []string{"CLAUDE.md"}
-	for _, name := range filesToCopy {
-		src := filepath.Join(persona.Dir, name)
-		data, err := os.ReadFile(src)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue // file not present in persona — skip
-			}
-			return fmt.Errorf("reading persona file %s: %w", name, err)
-		}
-		dst := filepath.Join(worktreePath, name)
-		if err := os.WriteFile(dst, data, 0644); err != nil {
-			return fmt.Errorf("writing %s to worktree: %w", name, err)
-		}
-	}
-	return nil
+	sort.Strings(extras)
+	return extras
 }
 
 // githubIssueNumber extracts the issue number from a GitHub issue URL.
