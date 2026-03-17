@@ -41,6 +41,25 @@ Implement the thing described below...`
 	}
 }
 
+func TestParseFrontMatter_Persona(t *testing.T) {
+	desc := `---
+conductor:
+  persona: lead-engineer
+---
+Build the feature`
+
+	cfg, body := ParseFrontMatter(desc)
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if cfg.Persona != "lead-engineer" {
+		t.Errorf("expected persona=lead-engineer, got %q", cfg.Persona)
+	}
+	if body != "Build the feature" {
+		t.Errorf("unexpected body: %q", body)
+	}
+}
+
 func TestParseFrontMatter_RoutingStrategy(t *testing.T) {
 	desc := `---
 conductor:

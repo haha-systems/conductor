@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/haha-systems/conductor/internal/config"
 	"github.com/haha-systems/conductor/internal/domain"
 	"github.com/haha-systems/conductor/internal/provider"
 )
@@ -31,6 +32,116 @@ func makeProviders(names ...string) map[string]provider.AgentProvider {
 		m[n] = &stubProvider{name: n}
 	}
 	return m
+}
+
+func makePersonas(names ...string) map[string]config.PersonaConfig {
+	m := make(map[string]config.PersonaConfig, len(names))
+	for _, n := range names {
+		m[n] = config.PersonaConfig{Name: n, Dir: "/tmp/personas/" + n}
+	}
+	return m
+}
+
+func makePersonasWithProvider(name, providerName string) map[string]config.PersonaConfig {
+	return map[string]config.PersonaConfig{
+		name: {Name: name, Provider: providerName, Dir: "/tmp/personas/" + name},
+	}
+}
+
+func TestRouter_PersonaFrontMatter(t *testing.T) {
+	personas := makePersonas("lead-engineer")
+	r := NewWithPersonas(makeProviders("claude", "gemini"), nil, nil, personas, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Persona: "lead-engineer"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Persona == nil {
+		t.Fatal("expected persona to be set")
+	}
+	if result.Persona.Name != "lead-engineer" {
+		t.Errorf("expected lead-engineer, got %s", result.Persona.Name)
+	}
+	// No provider override — uses default.
+	if result.Providers[0].Name() != "claude" {
+		t.Errorf("expected claude (default), got %s", result.Providers[0].Name())
+	}
+}
+
+func TestRouter_PersonaFrontMatter_WithProviderOverride(t *testing.T) {
+	personas := makePersonasWithProvider("lead-engineer", "gemini")
+	r := NewWithPersonas(makeProviders("claude", "gemini"), nil, nil, personas, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Persona: "lead-engineer"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Providers[0].Name() != "gemini" {
+		t.Errorf("expected gemini (persona override), got %s", result.Providers[0].Name())
+	}
+}
+
+func TestRouter_PersonaLabelRoute(t *testing.T) {
+	personas := makePersonas("lead-engineer")
+	personaRoutes := map[string]string{"feature": "lead-engineer"}
+	r := NewWithPersonas(makeProviders("claude"), nil, personaRoutes, personas, "round-robin", "claude")
+	task := &domain.Task{Labels: []string{"conductor", "feature"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Persona == nil || result.Persona.Name != "lead-engineer" {
+		t.Errorf("expected lead-engineer persona via label route, got %v", result.Persona)
+	}
+}
+
+func TestRouter_PersonaUnknown_FallsThrough(t *testing.T) {
+	// Unknown persona name in front-matter → falls through to default provider.
+	r := NewWithPersonas(makeProviders("claude"), nil, nil, map[string]config.PersonaConfig{}, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Persona: "nonexistent"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Persona != nil {
+		t.Error("expected nil persona for unknown persona name")
+	}
+	if result.Providers[0].Name() != "claude" {
+		t.Errorf("expected claude (default), got %s", result.Providers[0].Name())
+	}
+}
+
+func TestRouter_AgentWinsOverPersona(t *testing.T) {
+	// agent: in front-matter wins over persona:.
+	personas := makePersonas("lead-engineer")
+	r := NewWithPersonas(makeProviders("claude", "codex"), nil, nil, personas, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Agent: "codex", Persona: "lead-engineer"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Persona != nil {
+		t.Error("expected no persona when agent: is pinned")
+	}
+	if result.Providers[0].Name() != "codex" {
+		t.Errorf("expected codex, got %s", result.Providers[0].Name())
+	}
+}
+
+func TestRouter_PersonaRouteBeforeLabelRoute(t *testing.T) {
+	// persona_routes match should take precedence over label_routes for the same label.
+	personas := makePersonas("lead-engineer")
+	personaRoutes := map[string]string{"feature": "lead-engineer"}
+	labelRoutes := map[string]string{"feature": "gemini"}
+	r := NewWithPersonas(makeProviders("claude", "gemini"), labelRoutes, personaRoutes, personas, "round-robin", "claude")
+	task := &domain.Task{Labels: []string{"feature"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Persona == nil || result.Persona.Name != "lead-engineer" {
+		t.Errorf("expected persona route to win, got persona=%v", result.Persona)
+	}
 }
 
 func TestRouter_Pinned(t *testing.T) {
@@ -185,5 +296,93 @@ func TestRouter_NoProviders(t *testing.T) {
 	_, err := r.Route(&domain.Task{})
 	if err == nil {
 		t.Error("expected error when no providers available")
+	}
+}
+
+func TestRouter_Persona_FrontMatter(t *testing.T) {
+	personas := map[string]config.PersonaConfig{
+		"lead-engineer": {Name: "lead-engineer", Provider: "claude"},
+	}
+	r := NewWithPersonas(makeProviders("claude", "gemini"), nil, nil, personas, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Persona: "lead-engineer"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Providers[0].Name() != "claude" {
+		t.Errorf("expected claude, got %s", result.Providers[0].Name())
+	}
+	if result.Persona == nil || result.Persona.Name != "lead-engineer" {
+		t.Errorf("expected persona=lead-engineer, got %v", result.Persona)
+	}
+}
+
+func TestRouter_Persona_LabelRoute(t *testing.T) {
+	personas := map[string]config.PersonaConfig{
+		"project-manager": {Name: "project-manager", Provider: "gemini"},
+	}
+	personaRoutes := map[string]string{"planning": "project-manager"}
+	r := NewWithPersonas(makeProviders("claude", "gemini"), nil, personaRoutes, personas, "round-robin", "claude")
+	task := &domain.Task{Labels: []string{"conductor", "planning"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Providers[0].Name() != "gemini" {
+		t.Errorf("expected gemini (persona's provider), got %s", result.Providers[0].Name())
+	}
+	if result.Persona == nil || result.Persona.Name != "project-manager" {
+		t.Errorf("expected persona=project-manager, got %v", result.Persona)
+	}
+}
+
+func TestRouter_Persona_NoPersonaToml_UsesDefault(t *testing.T) {
+	// Persona with no provider override should use defaultName.
+	personas := map[string]config.PersonaConfig{
+		"lead-engineer": {Name: "lead-engineer"}, // no Provider
+	}
+	r := NewWithPersonas(makeProviders("claude"), nil, nil, personas, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Persona: "lead-engineer"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Providers[0].Name() != "claude" {
+		t.Errorf("expected default claude, got %s", result.Providers[0].Name())
+	}
+}
+
+func TestRouter_Persona_UnknownFallsThrough(t *testing.T) {
+	// Unknown persona in front-matter → falls through to strategy.
+	r := NewWithPersonas(makeProviders("claude"), nil, nil, map[string]config.PersonaConfig{}, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Persona: "nonexistent"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Providers[0].Name() != "claude" {
+		t.Errorf("expected claude fallthrough, got %s", result.Providers[0].Name())
+	}
+	if result.Persona != nil {
+		t.Errorf("expected nil persona for unknown name, got %v", result.Persona)
+	}
+}
+
+func TestRouter_Persona_AgentPinWins(t *testing.T) {
+	// agent: in front-matter always wins over persona:.
+	personas := map[string]config.PersonaConfig{
+		"lead-engineer": {Name: "lead-engineer", Provider: "gemini"},
+	}
+	r := NewWithPersonas(makeProviders("claude", "gemini"), nil, nil, personas, "round-robin", "claude")
+	task := &domain.Task{Config: &domain.TaskConfig{Agent: "claude", Persona: "lead-engineer"}}
+	result, err := r.Route(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Providers[0].Name() != "claude" {
+		t.Errorf("agent: should win, got %s", result.Providers[0].Name())
+	}
+	if result.Persona != nil {
+		t.Errorf("expected nil persona when agent: is pinned, got %v", result.Persona)
 	}
 }

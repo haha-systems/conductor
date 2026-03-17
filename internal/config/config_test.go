@@ -102,6 +102,76 @@ preserve_on_failure = true
 	}
 }
 
+func TestLoad_PersonaRoutes(t *testing.T) {
+	path := writeTemp(t, `
+[conductor]
+default_provider = "claude"
+
+[routing.persona_routes]
+"feature" = "lead-engineer"
+"planning" = "project-manager"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Routing.PersonaRoutes["feature"] != "lead-engineer" {
+		t.Errorf("expected feature->lead-engineer, got %v", cfg.Routing.PersonaRoutes)
+	}
+	if cfg.Routing.PersonaRoutes["planning"] != "project-manager" {
+		t.Errorf("expected planning->project-manager, got %v", cfg.Routing.PersonaRoutes)
+	}
+}
+
+func TestDiscoverPersonas_NoDir(t *testing.T) {
+	dir := t.TempDir()
+	personas := discoverPersonas(dir)
+	if len(personas) != 0 {
+		t.Errorf("expected empty map when personas dir absent, got %v", personas)
+	}
+}
+
+func TestDiscoverPersonas_WithPersonas(t *testing.T) {
+	dir := t.TempDir()
+	personasDir := filepath.Join(dir, ".conductor", "personas")
+
+	// Create lead-engineer persona with SOUL.md and CLAUDE.md.
+	leDir := filepath.Join(personasDir, "lead-engineer")
+	if err := os.MkdirAll(leDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(leDir, "SOUL.md"), []byte("I am a lead engineer."), 0644)   //nolint:errcheck
+	os.WriteFile(filepath.Join(leDir, "CLAUDE.md"), []byte("# Claude context"), 0644)      //nolint:errcheck
+
+	// Create project-manager persona with persona.toml.
+	pmDir := filepath.Join(personasDir, "project-manager")
+	if err := os.MkdirAll(pmDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(pmDir, "persona.toml"), []byte(`provider = "gemini"`), 0644) //nolint:errcheck
+
+	personas := discoverPersonas(dir)
+
+	le, ok := personas["lead-engineer"]
+	if !ok {
+		t.Fatal("expected lead-engineer persona")
+	}
+	if le.Name != "lead-engineer" {
+		t.Errorf("unexpected name: %s", le.Name)
+	}
+	if le.Provider != "" {
+		t.Errorf("expected no provider override, got %s", le.Provider)
+	}
+
+	pm, ok := personas["project-manager"]
+	if !ok {
+		t.Fatal("expected project-manager persona")
+	}
+	if pm.Provider != "gemini" {
+		t.Errorf("expected provider=gemini, got %s", pm.Provider)
+	}
+}
+
 func TestLoad_MissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nonexistent.toml"))
 	if err == nil {

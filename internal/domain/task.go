@@ -23,6 +23,7 @@ const (
 // TaskConfig holds the optional conductor: front-matter parsed from a task description.
 type TaskConfig struct {
 	Agent          string            `yaml:"agent"`
+	Persona        string            `yaml:"persona"`
 	Routing        string            `yaml:"routing"`
 	TimeoutMinutes int               `yaml:"timeout_minutes"`
 	Env            map[string]string `yaml:"env"`

@@ -2,12 +2,14 @@ package router
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
+	"github.com/haha-systems/conductor/internal/config"
 	"github.com/haha-systems/conductor/internal/domain"
 	"github.com/haha-systems/conductor/internal/provider"
 )
@@ -16,6 +18,8 @@ import (
 type Router struct {
 	providers     map[string]provider.AgentProvider
 	labelRoutes   map[string]string
+	personaRoutes map[string]string
+	personas      map[string]config.PersonaConfig
 	strategy      string
 	defaultName   string
 	roundRobinIdx atomic.Uint64
@@ -27,6 +31,8 @@ type RouteResult struct {
 	Providers []provider.AgentProvider
 	// RaceN is the number of parallel runs requested (1 = normal, >1 = race).
 	RaceN int
+	// Persona is the resolved persona, or nil if no persona was selected.
+	Persona *config.PersonaConfig
 }
 
 // New creates a Router.
@@ -37,17 +43,50 @@ func New(
 	defaultName string,
 ) *Router {
 	return &Router{
-		providers:   providers,
-		labelRoutes: labelRoutes,
-		strategy:    strategy,
-		defaultName: defaultName,
+		providers:     providers,
+		labelRoutes:   labelRoutes,
+		personaRoutes: map[string]string{},
+		personas:      map[string]config.PersonaConfig{},
+		strategy:      strategy,
+		defaultName:   defaultName,
+	}
+}
+
+// NewWithPersonas creates a Router with persona routing support.
+func NewWithPersonas(
+	providers map[string]provider.AgentProvider,
+	labelRoutes map[string]string,
+	personaRoutes map[string]string,
+	personas map[string]config.PersonaConfig,
+	strategy string,
+	defaultName string,
+) *Router {
+	if personaRoutes == nil {
+		personaRoutes = map[string]string{}
+	}
+	if personas == nil {
+		personas = map[string]config.PersonaConfig{}
+	}
+	return &Router{
+		providers:     providers,
+		labelRoutes:   labelRoutes,
+		personaRoutes: personaRoutes,
+		personas:      personas,
+		strategy:      strategy,
+		defaultName:   defaultName,
 	}
 }
 
 // Route selects providers for the given task.
-// Strategies are evaluated in order: pinned → label-based → configured strategy → default.
+// Precedence (highest → lowest):
+//  1. Pinned agent (front-matter agent:) → provider directly, no persona
+//  2. Pinned persona (front-matter persona:) → persona's provider (or default)
+//  3. Label-based persona route (persona_routes) → persona's provider
+//  4. Label-based provider route (label_routes) → provider directly
+//  5. Global strategy → provider
+//  6. Default provider
 func (r *Router) Route(task *domain.Task) (RouteResult, error) {
-	// 1. Pinned via front-matter agent field.
+	// 1. Pinned via front-matter agent field — no persona.
 	if task.Config != nil && task.Config.Agent != "" {
 		p, err := r.get(task.Config.Agent)
 		if err != nil {
@@ -62,7 +101,23 @@ func (r *Router) Route(task *domain.Task) (RouteResult, error) {
 		strategy = task.Config.Routing
 	}
 
-	// 3. Label-based routing (checked before strategy).
+	// Resolve persona (steps 2–3).
+	persona := r.resolvePersona(task)
+
+	if persona != nil {
+		// Use the persona's provider if set, otherwise fall back to default.
+		providerName := persona.Provider
+		if providerName == "" {
+			providerName = r.defaultName
+		}
+		p, err := r.get(providerName)
+		if err != nil {
+			return RouteResult{}, err
+		}
+		return RouteResult{Providers: []provider.AgentProvider{p}, RaceN: 1, Persona: persona}, nil
+	}
+
+	// 4. Label-based routing (checked before strategy).
 	for _, label := range task.Labels {
 		if providerName, ok := r.labelRoutes[label]; ok {
 			p, err := r.get(providerName)
@@ -73,7 +128,37 @@ func (r *Router) Route(task *domain.Task) (RouteResult, error) {
 		}
 	}
 
-	return r.applyStrategy(strategy)
+	result, err := r.applyStrategy(strategy)
+	if err != nil {
+		return RouteResult{}, err
+	}
+	return result, nil
+}
+
+// resolvePersona returns the persona to use for this task, or nil.
+// Checks front-matter persona: first, then label persona_routes.
+func (r *Router) resolvePersona(task *domain.Task) *config.PersonaConfig {
+	// Front-matter pinned persona.
+	if task.Config != nil && task.Config.Persona != "" {
+		name := task.Config.Persona
+		if p, ok := r.personas[name]; ok {
+			return &p
+		}
+		slog.Warn("unknown persona in task front-matter, falling through", "persona", name)
+		return nil
+	}
+
+	// Label-based persona route — first match wins.
+	for _, label := range task.Labels {
+		if personaName, ok := r.personaRoutes[label]; ok {
+			if p, ok := r.personas[personaName]; ok {
+				return &p
+			}
+			slog.Warn("persona_routes references unknown persona, falling through", "persona", personaName, "label", label)
+		}
+	}
+
+	return nil
 }
 
 func (r *Router) applyStrategy(strategy string) (RouteResult, error) {

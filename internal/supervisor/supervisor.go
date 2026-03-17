@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/haha-systems/conductor/internal/config"
 	"github.com/haha-systems/conductor/internal/domain"
 	"github.com/haha-systems/conductor/internal/provider"
 )
@@ -21,6 +23,8 @@ type RunRequest struct {
 	Provider provider.AgentProvider
 	// GlobalEnv are extra env vars from conductor.toml [sandbox].
 	GlobalEnv map[string]string
+	// Persona is the resolved persona for this run, or nil.
+	Persona *config.PersonaConfig
 }
 
 // Result is returned by the supervisor after a run terminates.
@@ -65,15 +69,24 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 		return s.fail(run, fmt.Errorf("create worktree: %w", err))
 	}
 
-	// 2. Write task prompt to file.
+	// 2. Copy persona files (e.g. CLAUDE.md) to worktree root, if a persona is active.
+	if req.Persona != nil {
+		if err := copyPersonaFiles(req.Persona, worktreePath); err != nil {
+			s.cleanup(run)
+			return s.fail(run, fmt.Errorf("copy persona files: %w", err))
+		}
+	}
+
+	// 3. Write task prompt to file.
 	taskFile := filepath.Join(worktreePath, ".conductor-task.md")
-	prompt := buildTaskPrompt(req.Task, s.loadWorkflow())
+	workflow := s.loadWorkflow(req.Persona)
+	prompt := buildTaskPrompt(req.Task, workflow, req.Persona)
 	if err := os.WriteFile(taskFile, prompt, 0600); err != nil {
 		s.cleanup(run)
 		return s.fail(run, fmt.Errorf("write task file: %w", err))
 	}
 
-	// 3. Open run log.
+	// 4. Open run log.
 	if err := os.MkdirAll(filepath.Join(worktreePath, "proof"), 0755); err != nil {
 		s.cleanup(run)
 		return s.fail(run, fmt.Errorf("create proof dir: %w", err))
@@ -88,12 +101,12 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 
 	logWriter := &providerLogWriter{w: logFile}
 
-	// 4. Apply timeout.
+	// 5. Apply timeout.
 	timeout := time.Duration(s.cfg.TimeoutMinutes) * time.Minute
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 5. Build env: merge global + per-task.
+	// 6. Build env: merge global + per-task.
 	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
 
 	rc := provider.RunContext{
@@ -104,7 +117,7 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 		TimeoutSeconds: int(timeout.Seconds()),
 	}
 
-	// 6. Launch provider.
+	// 7. Launch provider.
 	logEvent(logFile, "run_started", map[string]any{
 		"run_id":   run.ID,
 		"provider": req.Provider.Name(),
@@ -117,7 +130,7 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 		return s.fail(run, fmt.Errorf("launch provider: %w", err))
 	}
 
-	// 7. Wait for completion.
+	// 8. Wait for completion.
 	// exec.CommandContext kills the process when runCtx expires, so Wait() will
 	// return in all cases. We check runCtx.Err() after Wait() to distinguish
 	// timeout from ordinary failure. We do NOT call Cancel() here — the process
@@ -233,9 +246,16 @@ func taskEnv(task *domain.Task) map[string]string {
 	return task.Config.Env
 }
 
-// loadWorkflow reads the workflow file from the repo root. Returns empty string
-// if the file is absent or unreadable — callers treat that as no workflow.
-func (s *Supervisor) loadWorkflow() string {
+// loadWorkflow reads the workflow content. If a persona is active and has an
+// AGENTS.md file, that is used in place of the global workflow_file.
+func (s *Supervisor) loadWorkflow(persona *config.PersonaConfig) string {
+	if persona != nil {
+		agentsPath := filepath.Join(persona.Dir, "AGENTS.md")
+		if data, err := os.ReadFile(agentsPath); err == nil {
+			return string(data)
+		}
+	}
+
 	if s.cfg.WorkflowFile == "" {
 		return ""
 	}
@@ -250,12 +270,18 @@ func (s *Supervisor) loadWorkflow() string {
 // buildTaskPrompt formats a task into a structured prompt for the agent.
 // If workflow is non-empty it is prepended so the agent sees operating
 // instructions before the task-specific content.
-func buildTaskPrompt(task *domain.Task, workflow string) []byte {
+// If persona is non-nil, a Role section and additional context are injected.
+func buildTaskPrompt(task *domain.Task, workflow string, persona *config.PersonaConfig) []byte {
 	var b strings.Builder
 	if workflow != "" {
 		b.WriteString(workflow)
 		b.WriteString("\n\n---\n\n")
 	}
+
+	if persona != nil {
+		writePersonaRole(&b, persona)
+	}
+
 	fmt.Fprintf(&b, "# Task: %s\n\n", task.Title)
 	if task.SourceURL != "" {
 		fmt.Fprintf(&b, "**Source:** %s\n", task.SourceURL)
@@ -268,10 +294,105 @@ func buildTaskPrompt(task *domain.Task, workflow string) []byte {
 	if len(task.Labels) > 0 {
 		fmt.Fprintf(&b, "**Labels:** %s\n", strings.Join(task.Labels, ", "))
 	}
+	if persona != nil {
+		fmt.Fprintf(&b, "**Persona:** %s\n", persona.Name)
+	}
 	b.WriteString("\n## Description\n\n")
 	b.WriteString(task.Description)
 	b.WriteString("\n")
 	return []byte(b.String())
+}
+
+// writePersonaRole injects the SOUL.md, PERSONALITY.md, and additional .md
+// context files from the persona directory into the prompt builder.
+func writePersonaRole(b *strings.Builder, persona *config.PersonaConfig) {
+	soul := readPersonaFile(persona.Dir, "SOUL.md")
+	personality := readPersonaFile(persona.Dir, "PERSONALITY.md")
+
+	if soul != "" || personality != "" {
+		b.WriteString("## Role\n\n")
+		if soul != "" {
+			b.WriteString(soul)
+			b.WriteString("\n")
+		}
+		if personality != "" {
+			b.WriteString("\n")
+			b.WriteString(personality)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n---\n\n")
+	}
+
+	// Include any other .md files (excluding known special files).
+	extras := extraPersonaMDFiles(persona.Dir)
+	if len(extras) > 0 {
+		b.WriteString("## Persona Context\n\n")
+		for _, name := range extras {
+			content := readPersonaFile(persona.Dir, name)
+			if content != "" {
+				fmt.Fprintf(b, "### %s\n\n%s\n\n", name, content)
+			}
+		}
+		b.WriteString("---\n\n")
+	}
+}
+
+// readPersonaFile reads a file from the persona directory. Returns empty string
+// if the file is absent.
+func readPersonaFile(dir, name string) string {
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// extraPersonaMDFiles returns sorted names of .md files in the persona directory
+// that are not one of the known special files.
+func extraPersonaMDFiles(dir string) []string {
+	skip := map[string]bool{
+		"SOUL.md":        true,
+		"PERSONALITY.md": true,
+		"CLAUDE.md":      true,
+		"AGENTS.md":      true,
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".md") && !skip[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// copyPersonaFiles copies special non-prompt files from the persona directory
+// to the worktree root. Currently copies CLAUDE.md if present.
+func copyPersonaFiles(persona *config.PersonaConfig, worktreePath string) error {
+	filesToCopy := []string{"CLAUDE.md"}
+	for _, name := range filesToCopy {
+		src := filepath.Join(persona.Dir, name)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // file not present in persona — skip
+			}
+			return fmt.Errorf("reading persona file %s: %w", name, err)
+		}
+		dst := filepath.Join(worktreePath, name)
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return fmt.Errorf("writing %s to worktree: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // githubIssueNumber extracts the issue number from a GitHub issue URL.
