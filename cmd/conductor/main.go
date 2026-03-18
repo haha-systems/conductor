@@ -22,6 +22,8 @@ import (
 	"github.com/haha-systems/conductor/internal/worksource"
 )
 
+var version = "dev"
+
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		os.Exit(1)
