@@ -185,7 +185,7 @@ func (s *GitHubSource) ListOpenPRs(ctx context.Context) ([]*domain.Task, error) 
 		// Check if the PR is behind its base.
 		comparison, _, err := s.client.Repositories.CompareCommits(
 			ctx, s.owner, s.repo,
-			pr.GetBase().GetSHA(),
+			pr.GetBase().GetRef(), // branch name resolves to current HEAD at query time
 			pr.GetHead().GetSHA(),
 			nil,
 		)

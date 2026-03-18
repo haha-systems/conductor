@@ -140,8 +140,8 @@ func TestListOpenPRs_BehindBase(t *testing.T) {
 	mux.HandleFunc("/repos/org/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []any{makePR(7, "headSHA", "baseSHA")})
 	})
-	// CompareCommits: head is 1 behind base.
-	mux.HandleFunc("/repos/org/repo/compare/baseSHA...headSHA", func(w http.ResponseWriter, r *http.Request) {
+	// CompareCommits: head is 1 behind base (using branch ref "main").
+	mux.HandleFunc("/repos/org/repo/compare/main...headSHA", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"behind_by": 1, "ahead_by": 2})
 	})
 
@@ -171,7 +171,7 @@ func TestListOpenPRs_NotBehind_Excluded(t *testing.T) {
 		writeJSON(w, []any{makePR(8, "headSHA", "baseSHA")})
 	})
 	// behind_by = 0 — not behind.
-	mux.HandleFunc("/repos/org/repo/compare/baseSHA...headSHA", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/org/repo/compare/main...headSHA", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"behind_by": 0, "ahead_by": 1})
 	})
 
@@ -242,7 +242,7 @@ func TestListOpenPRs_ParsesAttempts(t *testing.T) {
 	mux.HandleFunc("/repos/org/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []any{makePR(12, "headSHA", "baseSHA", rebaseAttemptsPrefix+"2")})
 	})
-	mux.HandleFunc("/repos/org/repo/compare/baseSHA...headSHA", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/org/repo/compare/main...headSHA", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"behind_by": 1, "ahead_by": 0})
 	})
 
