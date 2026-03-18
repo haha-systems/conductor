@@ -70,11 +70,17 @@ func (p *TaskPoller) Done() {
 }
 
 func (p *TaskPoller) poll(ctx context.Context, out chan<- *domain.Task) {
-	tasks, err := p.source.Poll(ctx)
+	issueTasks, err := p.source.Poll(ctx)
 	if err != nil {
 		slog.Error("poll failed", "source", p.source.Name(), "error", err)
-		return
 	}
+
+	prTasks, err := p.source.ListOpenPRs(ctx)
+	if err != nil {
+		slog.Error("list open PRs failed", "source", p.source.Name(), "error", err)
+	}
+
+	tasks := append(issueTasks, prTasks...)
 
 	for _, task := range tasks {
 		if !p.tryAcquireSlot() {

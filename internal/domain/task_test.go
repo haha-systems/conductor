@@ -76,6 +76,45 @@ Do the thing`
 	}
 }
 
+func TestTaskType_DefaultIsIssue(t *testing.T) {
+	task := &Task{}
+	// Zero value of TaskType is "", not "issue" — callers should treat "" as issue.
+	// Verify the constant values are as expected.
+	if TaskTypeIssue != "issue" {
+		t.Errorf("expected TaskTypeIssue=\"issue\", got %q", TaskTypeIssue)
+	}
+	if TaskTypeRebase != "rebase" {
+		t.Errorf("expected TaskTypeRebase=\"rebase\", got %q", TaskTypeRebase)
+	}
+	// A task constructed without setting Type has the zero value (empty string),
+	// which should be treated as issue by callers.
+	if task.Type == TaskTypeRebase {
+		t.Error("zero-value task should not be treated as rebase")
+	}
+}
+
+func TestTask_RebaseFields(t *testing.T) {
+	task := &Task{
+		ID:         "99",
+		Type:       TaskTypeRebase,
+		Branch:     "ci/github-actions-workflows",
+		BaseBranch: "main",
+		Attempts:   1,
+	}
+	if task.Type != TaskTypeRebase {
+		t.Errorf("expected type=rebase, got %q", task.Type)
+	}
+	if task.Branch != "ci/github-actions-workflows" {
+		t.Errorf("unexpected branch: %q", task.Branch)
+	}
+	if task.BaseBranch != "main" {
+		t.Errorf("unexpected base branch: %q", task.BaseBranch)
+	}
+	if task.Attempts != 1 {
+		t.Errorf("expected attempts=1, got %d", task.Attempts)
+	}
+}
+
 func TestParseFrontMatter_MissingClosingMarker(t *testing.T) {
 	desc := `---
 conductor:

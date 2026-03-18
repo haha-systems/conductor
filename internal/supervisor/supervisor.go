@@ -16,6 +16,12 @@ import (
 	"github.com/haha-systems/conductor/internal/provider"
 )
 
+// RebaseRecorder is satisfied by any WorkSource that supports rebase outcome
+// recording. It is used by the supervisor without importing the worksource package.
+type RebaseRecorder interface {
+	RecordRebaseOutcome(ctx context.Context, task *domain.Task, succeeded bool, reason string) error
+}
+
 // RunRequest is submitted to the supervisor to start a run.
 type RunRequest struct {
 	Run      *domain.Run
@@ -25,6 +31,8 @@ type RunRequest struct {
 	GlobalEnv map[string]string
 	// Persona is the resolved persona for this run, or nil if none.
 	Persona *config.PersonaConfig
+	// Source is used by rebase tasks to record outcomes. Nil is safe for issue tasks.
+	Source RebaseRecorder
 }
 
 // Result is returned by the supervisor after a run terminates.
@@ -56,6 +64,10 @@ func New(cfg Config) *Supervisor {
 // Execute runs the task synchronously and returns when the run reaches a terminal state.
 // The caller is responsible for collecting proof afterwards.
 func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
+	if req.Task.Type == domain.TaskTypeRebase {
+		return s.executeRebase(ctx, req)
+	}
+
 	run := req.Run
 	now := time.Now()
 	run.StartedAt = now
@@ -384,4 +396,165 @@ func githubIssueNumber(sourceURL string) string {
 		return strings.TrimRight(parts[1], "/")
 	}
 	return ""
+}
+
+// executeRebase handles a TaskTypeRebase run: it sets up a worktree with the PR
+// branch, builds a rebase prompt, runs the agent, and records the outcome.
+func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result {
+	run := req.Run
+	now := time.Now()
+	run.StartedAt = now
+	run.Status = domain.RunStatusRunning
+
+	worktreePath := filepath.Join(s.cfg.RepoRoot, s.cfg.WorktreeBaseDir, run.ID)
+	run.WorktreePath = worktreePath
+
+	// Fetch so origin/<branch> is current.
+	fetchCmd := exec.Command("git", "fetch", "origin")
+	fetchCmd.Dir = s.cfg.RepoRoot
+	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		return s.fail(run, fmt.Errorf("git fetch: %w: %s", err, out))
+	}
+
+	// Create worktree with the PR branch checked out.
+	if err := s.createRebaseBranchWorktree(worktreePath, req.Task.Branch); err != nil {
+		return s.fail(run, fmt.Errorf("create rebase worktree: %w", err))
+	}
+
+	// Build rebase prompt.
+	workflow := s.loadRebaseWorkflow()
+	prompt := buildRebasePrompt(req.Task, workflow)
+	taskFile := filepath.Join(worktreePath, ".conductor-task.md")
+	if err := os.WriteFile(taskFile, prompt, 0600); err != nil {
+		s.cleanup(run)
+		return s.fail(run, fmt.Errorf("write task file: %w", err))
+	}
+
+	// Open run log.
+	if err := os.MkdirAll(filepath.Join(worktreePath, "proof"), 0755); err != nil {
+		s.cleanup(run)
+		return s.fail(run, fmt.Errorf("create proof dir: %w", err))
+	}
+	logPath := filepath.Join(worktreePath, "run.jsonl")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		s.cleanup(run)
+		return s.fail(run, fmt.Errorf("create run log: %w", err))
+	}
+	defer logFile.Close()
+
+	logWriter := &providerLogWriter{w: logFile}
+
+	// Apply timeout.
+	timeout := time.Duration(s.cfg.TimeoutMinutes) * time.Minute
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
+	rc := provider.RunContext{
+		RepoPath:       worktreePath,
+		TaskFile:       taskFile,
+		Env:            env,
+		LogWriter:      logWriter,
+		TimeoutSeconds: int(timeout.Seconds()),
+	}
+
+	logEvent(logFile, "run_started", map[string]any{
+		"run_id":   run.ID,
+		"provider": req.Provider.Name(),
+		"task_id":  run.TaskID,
+		"type":     "rebase",
+		"branch":   req.Task.Branch,
+	})
+
+	handle, err := req.Provider.Run(runCtx, rc)
+	if err != nil {
+		s.cleanup(run)
+		s.recordRebaseOutcome(ctx, req, false, err.Error())
+		return s.fail(run, fmt.Errorf("launch provider: %w", err))
+	}
+
+	waitErr := handle.Wait()
+	finished := time.Now()
+	run.FinishedAt = &finished
+
+	if runCtx.Err() == context.DeadlineExceeded {
+		run.Status = domain.RunStatusTimeout
+		reason := fmt.Sprintf("run timed out after %d minutes", s.cfg.TimeoutMinutes)
+		logEvent(logFile, "run_timeout", map[string]any{"run_id": run.ID})
+		s.recordRebaseOutcome(ctx, req, false, reason)
+		if !s.cfg.PreserveOnFailure {
+			s.cleanup(run)
+		}
+		return &Result{Run: run, Err: fmt.Errorf("%s", reason)}
+	}
+
+	if waitErr != nil {
+		run.Status = domain.RunStatusFailed
+		run.ErrorMsg = waitErr.Error()
+		logEvent(logFile, "run_failed", map[string]any{"run_id": run.ID, "error": waitErr.Error()})
+		s.recordRebaseOutcome(ctx, req, false, waitErr.Error())
+		if !s.cfg.PreserveOnFailure {
+			s.cleanup(run)
+		}
+		return &Result{Run: run, Err: waitErr}
+	}
+
+	run.Status = domain.RunStatusSucceeded
+	logEvent(logFile, "run_succeeded", map[string]any{"run_id": run.ID})
+	s.recordRebaseOutcome(ctx, req, true, "")
+	if !s.cfg.PreserveOnFailure {
+		s.cleanup(run)
+	}
+	return &Result{Run: run}
+}
+
+func (s *Supervisor) recordRebaseOutcome(ctx context.Context, req RunRequest, succeeded bool, reason string) {
+	if req.Source == nil {
+		return
+	}
+	req.Source.RecordRebaseOutcome(ctx, req.Task, succeeded, reason) //nolint:errcheck
+}
+
+func (s *Supervisor) createRebaseBranchWorktree(path, branch string) error {
+	cmd := exec.Command("git", "worktree", "add", "-B", branch, path, "origin/"+branch)
+	cmd.Dir = s.cfg.RepoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
+}
+
+// loadRebaseWorkflow reads .conductor/REBASE_WORKFLOW.md from the repo root.
+// Returns empty string if the file is absent.
+func (s *Supervisor) loadRebaseWorkflow() string {
+	path := filepath.Join(s.cfg.RepoRoot, ".conductor", "REBASE_WORKFLOW.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// buildRebasePrompt formats a rebase task into a prompt for the agent.
+func buildRebasePrompt(task *domain.Task, workflow string) []byte {
+	var b strings.Builder
+	if workflow != "" {
+		b.WriteString(workflow)
+		b.WriteString("\n\n---\n\n")
+	}
+	fmt.Fprintf(&b, "# Task: Rebase `%s` onto `%s`\n\n", task.Branch, task.BaseBranch)
+	fmt.Fprintf(&b, "**PR:** %s\n", task.SourceURL)
+	fmt.Fprintf(&b, "**Branch:** %s\n", task.Branch)
+	fmt.Fprintf(&b, "**Base:** %s\n", task.BaseBranch)
+	fmt.Fprintf(&b, "**Attempt:** %d of 3\n\n", task.Attempts+1)
+	b.WriteString("## Instructions\n\n")
+	b.WriteString("1. Run `git fetch origin`\n")
+	fmt.Fprintf(&b, "2. Run `git rebase origin/%s`\n", task.BaseBranch)
+	b.WriteString("3. If there are merge conflicts, resolve them carefully — preserve the intent of both sides\n")
+	fmt.Fprintf(&b, "4. Run `git push --force-with-lease origin %s`\n", task.Branch)
+	fmt.Fprintf(&b, "5. Do NOT open a new PR — one already exists at %s\n\n", task.SourceURL)
+	b.WriteString("If the rebase cannot be completed cleanly after your best effort, exit with a non-zero status and print a brief explanation of what conflicted.\n")
+	return []byte(b.String())
 }

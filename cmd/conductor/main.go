@@ -288,6 +288,7 @@ func executeRace(
 				Task:     task,
 				Provider: p,
 				Persona:  route.Persona,
+				Source:   source,
 			})
 			ch <- outcome{result: result, p: p}
 		}()
@@ -335,11 +336,17 @@ func executeRun(
 		Task:     task,
 		Provider: p,
 		Persona:  persona,
+		Source:   source,
 	})
 	if result.Err != nil {
 		log.Error("run failed", "run_id", run.ID, "error", result.Err)
-		source.PostResult(ctx, task, fmt.Sprintf("Run failed: %v", result.Err)) //nolint:errcheck
+		if task.Type != domain.TaskTypeRebase {
+			source.PostResult(ctx, task, fmt.Sprintf("Run failed: %v", result.Err)) //nolint:errcheck
+		}
 		return
+	}
+	if task.Type == domain.TaskTypeRebase {
+		return // outcome already recorded by supervisor via RecordRebaseOutcome
 	}
 	finishRun(ctx, run, task, collector, source, hooks, log)
 }
