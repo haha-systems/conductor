@@ -517,6 +517,17 @@ func (s *Supervisor) recordRebaseOutcome(ctx context.Context, req RunRequest, su
 }
 
 func (s *Supervisor) createRebaseBranchWorktree(path, branch string) error {
+	// Remove stale worktree metadata.
+	exec.Command("git", "-C", s.cfg.RepoRoot, "worktree", "prune").Run() //nolint:errcheck
+
+	// If another worktree has this branch checked out, remove it first.
+	listOut, err := exec.Command("git", "-C", s.cfg.RepoRoot, "worktree", "list", "--porcelain").Output()
+	if err == nil {
+		if stale := findWorktreeForBranch(string(listOut), branch); stale != "" && stale != path {
+			exec.Command("git", "-C", s.cfg.RepoRoot, "worktree", "remove", "--force", stale).Run() //nolint:errcheck
+		}
+	}
+
 	cmd := exec.Command("git", "worktree", "add", "-B", branch, path, "origin/"+branch)
 	cmd.Dir = s.cfg.RepoRoot
 	out, err := cmd.CombinedOutput()
@@ -524,6 +535,21 @@ func (s *Supervisor) createRebaseBranchWorktree(path, branch string) error {
 		return fmt.Errorf("%w: %s", err, out)
 	}
 	return nil
+}
+
+// findWorktreeForBranch parses `git worktree list --porcelain` output and
+// returns the worktree path that has the given branch checked out, or "".
+func findWorktreeForBranch(porcelain, branch string) string {
+	var current string
+	for _, line := range strings.Split(porcelain, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			current = strings.TrimPrefix(line, "worktree ")
+		}
+		if line == "branch refs/heads/"+branch {
+			return current
+		}
+	}
+	return ""
 }
 
 // loadRebaseWorkflow reads .conductor/REBASE_WORKFLOW.md from the repo root.
