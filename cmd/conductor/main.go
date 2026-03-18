@@ -340,7 +340,9 @@ func executeRun(
 	})
 	if result.Err != nil {
 		log.Error("run failed", "run_id", run.ID, "error", result.Err)
-		if task.Type != domain.TaskTypeRebase {
+		if task.Type == domain.TaskTypeRebase {
+			source.RecordRebaseOutcome(ctx, task, false, result.Err.Error()) //nolint:errcheck
+		} else {
 			source.PostResult(ctx, task, fmt.Sprintf("Run failed: %v", result.Err)) //nolint:errcheck
 		}
 		return

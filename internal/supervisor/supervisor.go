@@ -413,11 +413,13 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = s.cfg.RepoRoot
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
+		s.recordRebaseOutcome(ctx, req, false, err.Error())
 		return s.fail(run, fmt.Errorf("git fetch: %w: %s", err, out))
 	}
 
 	// Create worktree with the PR branch checked out.
 	if err := s.createRebaseBranchWorktree(worktreePath, req.Task.Branch); err != nil {
+		s.recordRebaseOutcome(ctx, req, false, err.Error())
 		return s.fail(run, fmt.Errorf("create rebase worktree: %w", err))
 	}
 
@@ -426,18 +428,21 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 	prompt := buildRebasePrompt(req.Task, workflow)
 	taskFile := filepath.Join(worktreePath, ".conductor-task.md")
 	if err := os.WriteFile(taskFile, prompt, 0600); err != nil {
+		s.recordRebaseOutcome(ctx, req, false, err.Error())
 		s.cleanup(run)
 		return s.fail(run, fmt.Errorf("write task file: %w", err))
 	}
 
 	// Open run log.
 	if err := os.MkdirAll(filepath.Join(worktreePath, "proof"), 0755); err != nil {
+		s.recordRebaseOutcome(ctx, req, false, err.Error())
 		s.cleanup(run)
 		return s.fail(run, fmt.Errorf("create proof dir: %w", err))
 	}
 	logPath := filepath.Join(worktreePath, "run.jsonl")
 	logFile, err := os.Create(logPath)
 	if err != nil {
+		s.recordRebaseOutcome(ctx, req, false, err.Error())
 		s.cleanup(run)
 		return s.fail(run, fmt.Errorf("create run log: %w", err))
 	}
