@@ -135,6 +135,16 @@ mutation($issueId: String!, $labelId: String!) {
 	return nil
 }
 
+// ListOpenPRs returns nil for Linear — PR rebase detection is not supported.
+func (s *LinearSource) ListOpenPRs(_ context.Context) ([]*domain.Task, error) {
+	return nil, nil
+}
+
+// RecordRebaseOutcome is a no-op for Linear — PR rebase detection is not supported.
+func (s *LinearSource) RecordRebaseOutcome(_ context.Context, _ *domain.Task, _ bool, _ string) error {
+	return nil
+}
+
 // PostResult adds a comment to the Linear issue.
 func (s *LinearSource) PostResult(ctx context.Context, task *domain.Task, summary string) error {
 	mutation := `

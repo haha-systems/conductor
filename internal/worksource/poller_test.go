@@ -14,6 +14,7 @@ import (
 // mockSource is a controllable WorkSource for testing.
 type mockSource struct {
 	tasks     []*domain.Task
+	prTasks   []*domain.Task
 	claimErr  error
 	pollCount atomic.Int32
 	claimed   []string
@@ -38,6 +39,14 @@ func (m *mockSource) Claim(_ context.Context, task *domain.Task) error {
 }
 
 func (m *mockSource) PostResult(_ context.Context, _ *domain.Task, _ string) error {
+	return nil
+}
+
+func (m *mockSource) ListOpenPRs(_ context.Context) ([]*domain.Task, error) {
+	return m.prTasks, nil
+}
+
+func (m *mockSource) RecordRebaseOutcome(_ context.Context, _ *domain.Task, _ bool, _ string) error {
 	return nil
 }
 
@@ -100,6 +109,45 @@ func TestPoller_BackPressure(t *testing.T) {
 	cancel()
 	// Drain
 	for range ch {
+	}
+}
+
+func TestPoller_RebaseAndIssueTasks_BothFlow(t *testing.T) {
+	issueTasks := makeTasks("issue-1")
+	prTask := &domain.Task{
+		ID:     "pr-1",
+		Status: domain.TaskStatusPending,
+		Type:   domain.TaskTypeRebase,
+	}
+	src := &mockSource{
+		tasks:   issueTasks,
+		prTasks: []*domain.Task{prTask},
+	}
+	p := NewPoller(src, PollerConfig{IntervalSeconds: 60, MaxConcurrentRuns: 4})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	ch := p.Run(ctx)
+	var received []*domain.Task
+	for task := range ch {
+		received = append(received, task)
+		p.Done()
+		if len(received) == 2 {
+			cancel()
+		}
+	}
+
+	if len(received) != 2 {
+		t.Fatalf("expected 2 tasks (1 issue + 1 rebase), got %d", len(received))
+	}
+
+	types := map[domain.TaskType]bool{}
+	for _, task := range received {
+		types[task.Type] = true
+	}
+	if !types[domain.TaskTypeRebase] {
+		t.Error("expected a rebase task to flow through the poller")
 	}
 }
 

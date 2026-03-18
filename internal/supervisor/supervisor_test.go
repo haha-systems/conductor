@@ -177,3 +177,84 @@ func TestCopyPersonaFiles_NoCLAUDEMd(t *testing.T) {
 		t.Errorf("unexpected error when CLAUDE.md absent: %v", err)
 	}
 }
+
+func TestBuildRebasePrompt_Format(t *testing.T) {
+	task := &domain.Task{
+		Type:       domain.TaskTypeRebase,
+		Branch:     "feature/my-pr",
+		BaseBranch: "main",
+		SourceURL:  "https://github.com/org/repo/pull/9",
+		Attempts:   1,
+	}
+	prompt := string(buildRebasePrompt(task, ""))
+
+	if !strings.Contains(prompt, "# Task: Rebase `feature/my-pr` onto `main`") {
+		t.Error("missing rebase title")
+	}
+	if !strings.Contains(prompt, "**Attempt:** 2 of 3") {
+		t.Error("expected attempt count 2 (Attempts+1)")
+	}
+	if !strings.Contains(prompt, "git rebase origin/main") {
+		t.Error("missing rebase command")
+	}
+	if !strings.Contains(prompt, "git push --force-with-lease origin feature/my-pr") {
+		t.Error("missing push command")
+	}
+	if !strings.Contains(prompt, "https://github.com/org/repo/pull/9") {
+		t.Error("missing PR URL")
+	}
+}
+
+func TestBuildRebasePrompt_WithWorkflow(t *testing.T) {
+	task := &domain.Task{
+		Type:       domain.TaskTypeRebase,
+		Branch:     "fix/thing",
+		BaseBranch: "main",
+		SourceURL:  "https://github.com/org/repo/pull/3",
+		Attempts:   0,
+	}
+	workflow := "You are rebasing a PR. Be careful."
+	prompt := string(buildRebasePrompt(task, workflow))
+
+	if !strings.HasPrefix(prompt, workflow) {
+		t.Error("workflow should appear at start of prompt")
+	}
+	if !strings.Contains(prompt, "---") {
+		t.Error("expected separator between workflow and task")
+	}
+}
+
+func TestExecute_RebaseTask_TakesRebasePath(t *testing.T) {
+	// We verify that Execute() with a rebase task does NOT fall through to the
+	// issue path by checking it calls executeRebase (which tries git fetch).
+	// Since there's no real git repo in a temp dir, it will fail at that step —
+	// but the error message must reflect the rebase path, not the issue path.
+	repoDir := t.TempDir()
+	sup := New(Config{
+		RepoRoot:       repoDir,
+		WorktreeBaseDir: ".conductor/runs",
+		TimeoutMinutes: 1,
+	})
+	task := &domain.Task{
+		ID:         "pr-99",
+		Type:       domain.TaskTypeRebase,
+		Branch:     "feature/test",
+		BaseBranch: "main",
+	}
+	run := &domain.Run{ID: "test-run", TaskID: task.ID}
+	result := sup.Execute(t.Context(), RunRequest{Run: run, Task: task})
+	if result == nil {
+		t.Fatal("expected a result")
+	}
+	// Should fail in the rebase path (git fetch fails in a non-git temp dir).
+	if result.Err == nil {
+		t.Fatal("expected error (no git repo in temp dir)")
+	}
+	// The error comes from git fetch, not from createWorktree (issue path).
+	// Both produce exec errors, but rebase path says "git fetch".
+	if !strings.Contains(result.Err.Error(), "git fetch") &&
+		!strings.Contains(result.Err.Error(), "fetch") &&
+		!strings.Contains(result.Err.Error(), "create rebase worktree") {
+		t.Errorf("expected rebase-path error, got: %v", result.Err)
+	}
+}

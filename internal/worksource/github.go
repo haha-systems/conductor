@@ -2,7 +2,9 @@ package worksource
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -13,8 +15,11 @@ import (
 )
 
 const (
-	claimedLabel = "conductor:claimed"
-	runningLabel = "conductor:running"
+	claimedLabel        = "conductor:claimed"
+	runningLabel        = "conductor:running"
+	rebasingLabel       = "conductor:rebasing"
+	rebaseAbandonedLabel = "conductor:rebase-abandoned"
+	rebaseAttemptsPrefix = "conductor:rebase-attempts-"
 )
 
 // GitHubSource polls a GitHub repository for issues and claims them via labels.
@@ -73,18 +78,25 @@ func (s *GitHubSource) Poll(ctx context.Context) ([]*domain.Task, error) {
 	return tasks, nil
 }
 
-// Claim adds the conductor:claimed label to the issue atomically.
-// If the label was already added by another process the API will succeed but we
-// do a fresh read to verify we were the one to add it (simple optimistic lock).
+// Claim adds the conductor:claimed label to the issue atomically, or
+// conductor:rebasing to the PR for rebase tasks.
 func (s *GitHubSource) Claim(ctx context.Context, task *domain.Task) error {
-	issueNum, err := strconv.Atoi(task.ID)
+	num, err := strconv.Atoi(task.ID)
 	if err != nil {
-		return fmt.Errorf("invalid github issue id %q: %w", task.ID, err)
+		return fmt.Errorf("invalid github id %q: %w", task.ID, err)
 	}
 
-	_, _, err = s.client.Issues.AddLabelsToIssue(ctx, s.owner, s.repo, issueNum, []string{claimedLabel})
+	if task.Type == domain.TaskTypeRebase {
+		_, _, err = s.client.Issues.AddLabelsToIssue(ctx, s.owner, s.repo, num, []string{rebasingLabel})
+		if err != nil {
+			return fmt.Errorf("claim rebase PR #%d: %w", num, err)
+		}
+		return nil
+	}
+
+	_, _, err = s.client.Issues.AddLabelsToIssue(ctx, s.owner, s.repo, num, []string{claimedLabel})
 	if err != nil {
-		return fmt.Errorf("claim issue #%d: %w", issueNum, err)
+		return fmt.Errorf("claim issue #%d: %w", num, err)
 	}
 	return nil
 }
@@ -143,5 +155,160 @@ func issueToTask(issue *gh.Issue, repo string) *domain.Task {
 		CreatedAt:   issue.GetCreatedAt().Time,
 		UpdatedAt:   issue.GetUpdatedAt().Time,
 	}
+}
+
+// ListOpenPRs returns open PRs that are behind their base branch and eligible
+// for an automated rebase. PRs are skipped if they are already claimed
+// (conductor:rebasing), abandoned (conductor:rebase-abandoned), or have
+// exhausted all attempts (conductor:rebase-attempts-3).
+func (s *GitHubSource) ListOpenPRs(ctx context.Context) ([]*domain.Task, error) {
+	opts := &gh.PullRequestListOptions{
+		State: "open",
+		ListOptions: gh.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	prs, _, err := s.client.PullRequests.List(ctx, s.owner, s.repo, opts)
+	if err != nil {
+		return nil, fmt.Errorf("list open PRs: %w", err)
+	}
+
+	var tasks []*domain.Task
+	for _, pr := range prs {
+		if prHasLabel(pr, rebasingLabel) ||
+			prHasLabel(pr, rebaseAbandonedLabel) ||
+			prHasLabel(pr, rebaseAttemptsPrefix+"3") {
+			continue
+		}
+
+		// Check if the PR is behind its base.
+		comparison, _, err := s.client.Repositories.CompareCommits(
+			ctx, s.owner, s.repo,
+			pr.GetBase().GetSHA(),
+			pr.GetHead().GetSHA(),
+			nil,
+		)
+		if err != nil {
+			// Log and skip this PR rather than failing the whole list.
+			continue
+		}
+		if comparison.GetBehindBy() <= 0 {
+			continue
+		}
+
+		attempts := rebaseAttempts(pr)
+		tasks = append(tasks, prToRebaseTask(pr, s.owner+"/"+s.repo, attempts))
+	}
+	return tasks, nil
+}
+
+// RecordRebaseOutcome updates labels and optionally posts a comment after a
+// rebase attempt. On success, removes conductor:rebasing. On failure,
+// increments the attempt counter; after 3 failures adds conductor:rebase-abandoned
+// and posts an abandonment comment.
+func (s *GitHubSource) RecordRebaseOutcome(ctx context.Context, task *domain.Task, succeeded bool, reason string) error {
+	prNum, err := strconv.Atoi(task.ID)
+	if err != nil {
+		return fmt.Errorf("invalid PR id %q: %w", task.ID, err)
+	}
+
+	// Always remove conductor:rebasing.
+	_, err = s.client.Issues.RemoveLabelForIssue(ctx, s.owner, s.repo, prNum, rebasingLabel)
+	if err != nil {
+		// Ignore 404 — label may not be present.
+		if !isNotFound(err) {
+			return fmt.Errorf("remove rebasing label: %w", err)
+		}
+	}
+
+	if succeeded {
+		return nil
+	}
+
+	newAttempts := task.Attempts + 1
+
+	// Remove old attempts label if present, then add the new one.
+	if task.Attempts > 0 {
+		old := rebaseAttemptsPrefix + strconv.Itoa(task.Attempts)
+		_, _ = s.client.Issues.RemoveLabelForIssue(ctx, s.owner, s.repo, prNum, old) //nolint:errcheck
+	}
+	_, _, err = s.client.Issues.AddLabelsToIssue(ctx, s.owner, s.repo, prNum, []string{rebaseAttemptsPrefix + strconv.Itoa(newAttempts)})
+	if err != nil {
+		return fmt.Errorf("add rebase-attempts label: %w", err)
+	}
+
+	if newAttempts >= 3 {
+		_, _, err = s.client.Issues.AddLabelsToIssue(ctx, s.owner, s.repo, prNum, []string{rebaseAbandonedLabel})
+		if err != nil {
+			return fmt.Errorf("add rebase-abandoned label: %w", err)
+		}
+
+		body := fmt.Sprintf("## Conductor: Rebase Abandoned\n\nAfter 3 attempts, the conductor was unable to rebase this branch onto `%s`.\n\n**Last error:** %s\n\nPlease rebase manually and force-push, or close and re-open the PR.",
+			task.BaseBranch, reason)
+		comment := &gh.IssueComment{Body: gh.Ptr(body)}
+		_, _, err = s.client.Issues.CreateComment(ctx, s.owner, s.repo, prNum, comment)
+		if err != nil {
+			return fmt.Errorf("post abandonment comment: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// prHasLabel returns true if the PR has the named label.
+func prHasLabel(pr *gh.PullRequest, name string) bool {
+	for _, l := range pr.Labels {
+		if l.GetName() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// rebaseAttempts returns the current attempt count encoded in PR labels.
+func rebaseAttempts(pr *gh.PullRequest) int {
+	for _, l := range pr.Labels {
+		name := l.GetName()
+		if strings.HasPrefix(name, rebaseAttemptsPrefix) {
+			n, err := strconv.Atoi(strings.TrimPrefix(name, rebaseAttemptsPrefix))
+			if err == nil {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// prToRebaseTask converts a GitHub PR to a rebase domain.Task.
+func prToRebaseTask(pr *gh.PullRequest, repo string, attempts int) *domain.Task {
+	labels := make([]string, 0, len(pr.Labels))
+	for _, l := range pr.Labels {
+		labels = append(labels, l.GetName())
+	}
+	return &domain.Task{
+		ID:         strconv.Itoa(pr.GetNumber()),
+		Title:      fmt.Sprintf("Rebase #%d: %s", pr.GetNumber(), pr.GetTitle()),
+		Labels:     labels,
+		Status:     domain.TaskStatusPending,
+		Source:     "github",
+		SourceURL:  pr.GetHTMLURL(),
+		Type:       domain.TaskTypeRebase,
+		Branch:     pr.GetHead().GetRef(),
+		BaseBranch: pr.GetBase().GetRef(),
+		Attempts:   attempts,
+	}
+}
+
+// isNotFound returns true if the GitHub API error is a 404.
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var errResp *gh.ErrorResponse
+	if errors.As(err, &errResp) {
+		return errResp.Response.StatusCode == http.StatusNotFound
+	}
+	return strings.Contains(err.Error(), "404")
 }
 
