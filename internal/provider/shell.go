@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
@@ -44,7 +43,7 @@ func (a *shellAdapter) adapterRunWithStdin(ctx context.Context, rc RunContext, s
 	cmd.Stdin = stdin
 	cmd.Stdout = rc.LogWriter
 	cmd.Stderr = rc.LogWriter
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcAttr(cmd)
 
 	if err := cmd.Start(); err != nil {
 		if stdin != nil {
@@ -72,20 +71,7 @@ func (h *processHandle) Wait() error {
 // Cancel sends SIGTERM to the process group, then schedules SIGKILL after a
 // grace period. It does NOT call Wait — the caller owns exactly one Wait call.
 func (h *processHandle) Cancel() error {
-	if h.cmd.Process == nil {
-		return nil
-	}
-	pgid := -h.cmd.Process.Pid
-	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
-		if err == syscall.ESRCH {
-			return nil // already exited
-		}
-		return fmt.Errorf("cancel SIGTERM: %w", err)
-	}
-	time.AfterFunc(killGrace, func() {
-		syscall.Kill(pgid, syscall.SIGKILL) //nolint:errcheck
-	})
-	return nil
+	return cancelProcess(h.cmd)
 }
 
 // buildEnv merges RunContext.Env on top of the current process environment.
