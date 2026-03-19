@@ -239,6 +239,9 @@ func parseTestOutput(output string) (total, failures int) {
 }
 
 func writeSummary(path string, bundle *domain.ProofBundle) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create proof dir: %w", err)
+	}
 	data, err := json.MarshalIndent(bundle, "", "  ")
 	if err != nil {
 		return err
