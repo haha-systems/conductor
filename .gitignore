@@ -3,3 +3,4 @@
 node_modules
 /conductor
 .conductor/runs/
+conductor.toml
