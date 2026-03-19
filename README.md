@@ -193,6 +193,30 @@ After a successful run, Conductor writes a `proof/summary.json` file inside the 
 
 Use `conductor land --run-id <id>` to rebase the worktree branch on `main`, wait for CI to pass, and merge automatically.
 
+## `.conductor/` directory structure
+
+Conductor looks for several files inside a `.conductor/` directory at the root of your repo. None are required, but they let you customise how agents behave.
+
+| Path | Purpose |
+|------|---------|
+| `.conductor/WORKFLOW.md` | Injected at the top of every task prompt — use for global agent instructions |
+| `.conductor/REBASE_WORKFLOW.md` | Injected into rebase task prompts (optional, falls back to none) |
+| `.conductor/personas/<name>/` | Persona directory — see Personas section |
+| `.conductor/personas/<name>/SOUL.md` | Core identity injected as the Role section of the task prompt |
+| `.conductor/personas/<name>/PERSONALITY.md` | Behavioral traits appended to the Role section |
+| `.conductor/personas/<name>/CLAUDE.md` | Copied to the worktree root before the agent runs |
+| `.conductor/personas/<name>/AGENTS.md` | Replaces `WORKFLOW.md` for this persona |
+| `.conductor/personas/<name>/persona.toml` | Optional: `provider = "claude"` to override the default provider |
+| `.conductor/runs/` | Auto-managed run worktrees (configured via `worktree_dir`) |
+
+The `workflow_file` and `worktree_dir` config keys control which paths Conductor uses:
+
+```toml
+[sandbox]
+worktree_dir  = ".conductor/runs"
+workflow_file = ".conductor/WORKFLOW.md"
+```
+
 ## License
 
 Apache 2.0
