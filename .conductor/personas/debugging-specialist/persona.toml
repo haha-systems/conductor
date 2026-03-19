@@ -1,0 +1,3 @@
+name = "Jordan"
+email = "jordan@haha-systems.bot"
+github_token_env = "GITHUB_TOKEN_DEBUGGING_SPECIALIST"
