@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -28,7 +29,6 @@ const (
 	approvedLabel        = "conductor:approved"
 	reviewAbandonedLabel = "conductor:review-abandoned"
 	reviewCyclePrefix    = "conductor:review-cycle-"
-	issueRefPrefix       = "conductor:issue-"
 )
 
 // GitHubSource polls a GitHub repository for issues and claims them via labels.
@@ -282,11 +282,9 @@ func (s *GitHubSource) RecordRebaseOutcome(ctx context.Context, task *domain.Tas
 	return nil
 }
 
-// MarkPRNeedsReview adds conductor:needs-review to the PR and records the
-// originating issue number as a conductor:issue-N label.
+// MarkPRNeedsReview adds conductor:needs-review to the PR.
 func (s *GitHubSource) MarkPRNeedsReview(ctx context.Context, prNumber int, issueNumber int) error {
-	labels := []string{needsReviewLabel, issueRefPrefix + strconv.Itoa(issueNumber)}
-	_, _, err := s.client.Issues.AddLabelsToIssue(ctx, s.owner, s.repo, prNumber, labels)
+	_, _, err := s.client.Issues.AddLabelsToIssue(ctx, s.owner, s.repo, prNumber, []string{needsReviewLabel})
 	if err != nil {
 		return fmt.Errorf("mark PR #%d needs-review: %w", prNumber, err)
 	}
@@ -453,18 +451,16 @@ func prToReviseTask(pr *gh.PullRequest, repo string) *domain.Task {
 	}
 }
 
-// parseIssueRef extracts the originating issue number from the conductor:issue-N label.
+// parseIssueRef extracts the originating issue number from the PR body by
+// matching a "Closes #N" reference written by conductor at PR creation time.
 func parseIssueRef(pr *gh.PullRequest) int {
-	for _, l := range pr.Labels {
-		name := l.GetName()
-		if strings.HasPrefix(name, issueRefPrefix) {
-			n, err := strconv.Atoi(strings.TrimPrefix(name, issueRefPrefix))
-			if err == nil {
-				return n
-			}
-		}
+	re := regexp.MustCompile(`(?i)closes\s+#(\d+)`)
+	m := re.FindStringSubmatch(pr.GetBody())
+	if len(m) < 2 {
+		return 0
 	}
-	return 0
+	n, _ := strconv.Atoi(m[1])
+	return n
 }
 
 // parseReviewCycle extracts the current review cycle from conductor:review-cycle-N labels.

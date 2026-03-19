@@ -74,6 +74,12 @@ func makePR(num int, head, base string, labels ...string) map[string]any {
 	}
 }
 
+func makePRWithBody(num int, head, base, body string, labels ...string) map[string]any {
+	m := makePR(num, head, base, labels...)
+	m["body"] = body
+	return m
+}
+
 func TestNewGitHubSource_InvalidRepo(t *testing.T) {
 	cases := []string{"", "noslash", "/nope", "nope/"}
 	for _, repo := range cases {
@@ -444,20 +450,18 @@ func TestMarkPRNeedsReview(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	hasNeedsReview := false
-	hasIssueRef := false
 	for _, l := range addedLabels {
 		if l == needsReviewLabel {
 			hasNeedsReview = true
-		}
-		if l == issueRefPrefix+"42" {
-			hasIssueRef = true
 		}
 	}
 	if !hasNeedsReview {
 		t.Errorf("expected %q label, got %v", needsReviewLabel, addedLabels)
 	}
-	if !hasIssueRef {
-		t.Errorf("expected %q label, got %v", issueRefPrefix+"42", addedLabels)
+	for _, l := range addedLabels {
+		if strings.HasPrefix(l, "conductor:issue-") {
+			t.Errorf("unexpected dynamic issue label added: %q", l)
+		}
 	}
 }
 
@@ -466,7 +470,7 @@ func TestMarkPRNeedsReview(t *testing.T) {
 func TestListPRsNeedingReview_ReturnsPRWithNeedsReview(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/org/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, []any{makePR(7, "headSHA", "baseSHA", needsReviewLabel, issueRefPrefix+"42")})
+		writeJSON(w, []any{makePRWithBody(7, "headSHA", "baseSHA", "Closes #42\n\nImplement the feature.", needsReviewLabel)})
 	})
 
 	s := newTestGitHubSource(t, mux)
@@ -542,7 +546,7 @@ func TestListPRsNeedingReview_ExcludesAbandoned(t *testing.T) {
 func TestListPRsNeedingRevision_ReturnsPRWithNeedsRevision(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/org/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, []any{makePR(11, "headSHA", "baseSHA", needsRevisionLabel, issueRefPrefix+"42", reviewCyclePrefix+"1")})
+		writeJSON(w, []any{makePRWithBody(11, "headSHA", "baseSHA", "Closes #42\n\nImplement the feature.", needsRevisionLabel, reviewCyclePrefix+"1")})
 	})
 
 	s := newTestGitHubSource(t, mux)
@@ -803,6 +807,27 @@ func TestClaim_ReviseTask(t *testing.T) {
 	}
 	if len(deletedPaths) == 0 {
 		t.Error("expected needs-revision label to be removed")
+	}
+}
+
+func TestParseIssueRef(t *testing.T) {
+	cases := []struct {
+		body     string
+		expected int
+	}{
+		{"Closes #42\n\nSome description", 42},
+		{"closes #7", 7},
+		{"CLOSES #100\n\nMore text", 100},
+		{"Closes  #42", 42},
+		{"No closing reference here", 0},
+		{"", 0},
+	}
+	for _, tc := range cases {
+		pr := &gh.PullRequest{Body: gh.Ptr(tc.body)}
+		got := parseIssueRef(pr)
+		if got != tc.expected {
+			t.Errorf("body=%q: expected %d, got %d", tc.body, tc.expected, got)
+		}
 	}
 }
 
