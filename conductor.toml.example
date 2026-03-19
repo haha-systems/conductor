@@ -4,7 +4,7 @@ default_provider = "claude"
 work_interval_seconds = 30
 
 [work_sources.github]
-repo = "haha-systems/conductor"
+repo = "your-org/your-repo"
 label_filter = ["conductor"]
 
 [providers.claude]
