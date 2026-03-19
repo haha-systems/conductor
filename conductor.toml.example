@@ -17,6 +17,11 @@ cost_per_1k_tokens = 0.003
 [routing]
 strategy = "round-robin"
 
+[routing.persona_routes]
+"bug" = "debugging-specialist"
+"enhancement" = "lead-engineer"
+"conductor" = "lead-engineer"
+
 [proof]
 require_ci_pass = true
 pr_base_branch = "main"
