@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"github.com/haha-systems/conductor/internal/config"
 	"github.com/haha-systems/conductor/internal/domain"
@@ -91,10 +94,13 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 	worktreePath := filepath.Join(s.cfg.RepoRoot, s.cfg.WorktreeBaseDir, run.ID)
 	run.WorktreePath = worktreePath
 
+	charmlog.Info("run starting", "run_id", run.ID, "task_id", run.TaskID, "type", "issue", "provider", req.Provider.Name())
+
 	// 1. Create git worktree.
 	if err := s.createWorktree(worktreePath); err != nil {
 		return s.fail(run, fmt.Errorf("create worktree: %w", err))
 	}
+	charmlog.Info("worktree created", "run_id", run.ID, "path", worktreePath)
 
 	// 2. Copy persona files (e.g. CLAUDE.md) into the worktree root if a persona is set.
 	if req.Persona != nil {
@@ -126,7 +132,7 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 	}
 	defer logFile.Close()
 
-	logWriter := &providerLogWriter{w: logFile}
+	logWriter := newProviderLogWriter(logFile, run.ID)
 
 	// 5. Apply timeout.
 	timeout := time.Duration(s.cfg.TimeoutMinutes) * time.Minute
@@ -156,6 +162,7 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 		s.cleanup(run)
 		return s.fail(run, fmt.Errorf("launch provider: %w", err))
 	}
+	charmlog.Info("agent launched", "run_id", run.ID, "provider", req.Provider.Name())
 
 	// 8. Wait for completion.
 	// exec.CommandContext kills the process when runCtx expires, so Wait() will
@@ -167,10 +174,12 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 
 	finished := time.Now()
 	run.FinishedAt = &finished
+	duration := finished.Sub(run.StartedAt).Round(time.Second)
 
 	if runCtx.Err() == context.DeadlineExceeded {
 		run.Status = domain.RunStatusTimeout
 		logEvent(logFile, "run_timeout", map[string]any{"run_id": run.ID})
+		charmlog.Warn("run timed out", "run_id", run.ID, "task_id", run.TaskID, "timeout", fmt.Sprintf("%dm", s.cfg.TimeoutMinutes))
 		if !s.cfg.PreserveOnFailure {
 			s.cleanup(run)
 		}
@@ -181,6 +190,7 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 		run.Status = domain.RunStatusFailed
 		run.ErrorMsg = waitErr.Error()
 		logEvent(logFile, "run_failed", map[string]any{"run_id": run.ID, "error": waitErr.Error()})
+		charmlog.Error("run failed", "run_id", run.ID, "task_id", run.TaskID, "error", waitErr)
 		if !s.cfg.PreserveOnFailure {
 			s.cleanup(run)
 		}
@@ -189,6 +199,7 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 
 	run.Status = domain.RunStatusSucceeded
 	logEvent(logFile, "run_succeeded", map[string]any{"run_id": run.ID})
+	charmlog.Info("run succeeded", "run_id", run.ID, "task_id", run.TaskID, "duration", duration)
 
 	return &Result{Run: run}
 }
@@ -238,20 +249,46 @@ func logEvent(w *os.File, event string, fields map[string]any) {
 	w.Write(append(line, '\n')) //nolint:errcheck
 }
 
-// providerLogWriter wraps the run log file and writes each provider output
-// chunk as a structured JSON log entry.
+// providerLogWriter wraps the run log file and streams each line to stderr
+// with a run ID prefix so concurrent runs stay distinguishable.
 type providerLogWriter struct {
-	w *os.File
+	w      *os.File // run.jsonl
+	prefix string   // e.g. "[run_123] "
+	buf    []byte   // line buffer for prefix injection
+}
+
+func newProviderLogWriter(w *os.File, runID string) *providerLogWriter {
+	return &providerLogWriter{
+		w:      w,
+		prefix: "[" + runID + "] ",
+	}
 }
 
 func (lw *providerLogWriter) Write(p []byte) (int, error) {
-	entry := map[string]any{
-		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		"event":     "provider_stdout",
-		"line":      string(p),
+	lw.buf = append(lw.buf, p...)
+
+	for {
+		idx := bytes.IndexByte(lw.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := lw.buf[:idx+1]
+
+		// Write to run.jsonl as structured JSON.
+		entry := map[string]any{
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+			"event":     "provider_stdout",
+			"line":      string(bytes.TrimRight(line, "\n")),
+		}
+		encoded, _ := json.Marshal(entry)
+		lw.w.Write(append(encoded, '\n')) //nolint:errcheck
+
+		// Stream to stderr with run ID prefix.
+		fmt.Fprintf(os.Stderr, "%s%s", lw.prefix, line)
+
+		lw.buf = lw.buf[idx+1:]
 	}
-	line, _ := json.Marshal(entry)
-	lw.w.Write(append(line, '\n')) //nolint:errcheck
+
 	return len(p), nil
 }
 
@@ -424,6 +461,8 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 	worktreePath := filepath.Join(s.cfg.RepoRoot, s.cfg.WorktreeBaseDir, run.ID)
 	run.WorktreePath = worktreePath
 
+	charmlog.Info("rebase starting", "run_id", run.ID, "pr", req.Task.ID, "branch", req.Task.Branch, "cycle", req.Task.Attempts+1)
+
 	// Fetch so origin/<branch> is current.
 	fetchCmd := exec.Command("git", "fetch", "origin")
 	fetchCmd.Dir = s.cfg.RepoRoot
@@ -463,7 +502,7 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 	}
 	defer logFile.Close()
 
-	logWriter := &providerLogWriter{w: logFile}
+	logWriter := newProviderLogWriter(logFile, run.ID)
 
 	// Apply timeout.
 	timeout := time.Duration(s.cfg.TimeoutMinutes) * time.Minute
@@ -493,6 +532,7 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 		s.recordRebaseOutcome(ctx, req, false, err.Error())
 		return s.fail(run, fmt.Errorf("launch provider: %w", err))
 	}
+	charmlog.Info("agent launched", "run_id", run.ID, "provider", req.Provider.Name())
 
 	waitErr := handle.Wait()
 	finished := time.Now()
@@ -502,6 +542,7 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 		run.Status = domain.RunStatusTimeout
 		reason := fmt.Sprintf("run timed out after %d minutes", s.cfg.TimeoutMinutes)
 		logEvent(logFile, "run_timeout", map[string]any{"run_id": run.ID})
+		charmlog.Warn("run timed out", "run_id", run.ID, "pr", req.Task.ID, "branch", req.Task.Branch)
 		s.recordRebaseOutcome(ctx, req, false, reason)
 		if !s.cfg.PreserveOnFailure {
 			s.cleanup(run)
@@ -513,6 +554,7 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 		run.Status = domain.RunStatusFailed
 		run.ErrorMsg = waitErr.Error()
 		logEvent(logFile, "run_failed", map[string]any{"run_id": run.ID, "error": waitErr.Error()})
+		charmlog.Error("rebase failed", "run_id", run.ID, "pr", req.Task.ID, "attempt", req.Task.Attempts+1, "error", waitErr)
 		s.recordRebaseOutcome(ctx, req, false, waitErr.Error())
 		if !s.cfg.PreserveOnFailure {
 			s.cleanup(run)
@@ -522,6 +564,7 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 
 	run.Status = domain.RunStatusSucceeded
 	logEvent(logFile, "run_succeeded", map[string]any{"run_id": run.ID})
+	charmlog.Info("rebase succeeded", "run_id", run.ID, "pr", req.Task.ID, "branch", req.Task.Branch)
 	s.recordRebaseOutcome(ctx, req, true, "")
 	if !s.cfg.PreserveOnFailure {
 		s.cleanup(run)
@@ -538,6 +581,8 @@ func (s *Supervisor) executeReview(ctx context.Context, req RunRequest) *Result 
 	run.StartedAt = now
 	run.Status = domain.RunStatusRunning
 	run.WorktreePath = s.cfg.RepoRoot
+
+	charmlog.Info("review starting", "run_id", run.ID, "pr", req.Task.ID, "issue", req.Task.SpecIssueNumber, "cycle", req.Task.ReviewCycle)
 
 	// Build review prompt.
 	prompt, err := s.buildReviewPrompt(ctx, req.Task)
@@ -563,7 +608,7 @@ func (s *Supervisor) executeReview(ctx context.Context, req RunRequest) *Result 
 	}
 	defer logFile.Close()
 
-	logWriter := &providerLogWriter{w: logFile}
+	logWriter := newProviderLogWriter(logFile, run.ID)
 
 	// Apply timeout.
 	timeout := time.Duration(s.cfg.TimeoutMinutes) * time.Minute
@@ -591,6 +636,7 @@ func (s *Supervisor) executeReview(ctx context.Context, req RunRequest) *Result 
 		s.recordReviewOutcome(ctx, req, false, err.Error())
 		return s.fail(run, fmt.Errorf("launch provider: %w", err))
 	}
+	charmlog.Info("agent launched", "run_id", run.ID, "provider", req.Provider.Name())
 
 	waitErr := handle.Wait()
 	finished := time.Now()
@@ -600,6 +646,7 @@ func (s *Supervisor) executeReview(ctx context.Context, req RunRequest) *Result 
 		run.Status = domain.RunStatusTimeout
 		reason := fmt.Sprintf("review timed out after %d minutes", s.cfg.TimeoutMinutes)
 		logEvent(logFile, "run_timeout", map[string]any{"run_id": run.ID})
+		charmlog.Warn("run timed out", "run_id", run.ID, "pr", req.Task.ID)
 		s.recordReviewOutcome(ctx, req, false, reason)
 		return &Result{Run: run, Err: fmt.Errorf("%s", reason)}
 	}
@@ -608,6 +655,7 @@ func (s *Supervisor) executeReview(ctx context.Context, req RunRequest) *Result 
 		run.Status = domain.RunStatusFailed
 		run.ErrorMsg = waitErr.Error()
 		logEvent(logFile, "run_failed", map[string]any{"run_id": run.ID, "error": waitErr.Error()})
+		charmlog.Error("run failed", "run_id", run.ID, "pr", req.Task.ID, "error", waitErr)
 		s.recordReviewOutcome(ctx, req, false, waitErr.Error())
 		return &Result{Run: run, Err: waitErr}
 	}
@@ -615,6 +663,7 @@ func (s *Supervisor) executeReview(ctx context.Context, req RunRequest) *Result 
 	run.Status = domain.RunStatusSucceeded
 	logEvent(logFile, "run_succeeded", map[string]any{"run_id": run.ID})
 	// Agent exit 0 means it approved via gh pr review --approve.
+	charmlog.Info("review approved", "run_id", run.ID, "pr", req.Task.ID)
 	s.recordReviewOutcome(ctx, req, true, "")
 	return &Result{Run: run}
 }
@@ -629,6 +678,8 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 
 	worktreePath := filepath.Join(s.cfg.RepoRoot, s.cfg.WorktreeBaseDir, run.ID)
 	run.WorktreePath = worktreePath
+
+	charmlog.Info("revision starting", "run_id", run.ID, "pr", req.Task.ID, "issue", req.Task.SpecIssueNumber, "cycle", req.Task.ReviewCycle)
 
 	// Fetch so origin/<branch> is current.
 	fetchCmd := exec.Command("git", "fetch", "origin")
@@ -673,7 +724,7 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 	}
 	defer logFile.Close()
 
-	logWriter := &providerLogWriter{w: logFile}
+	logWriter := newProviderLogWriter(logFile, run.ID)
 
 	// Apply timeout.
 	timeout := time.Duration(s.cfg.TimeoutMinutes) * time.Minute
@@ -702,6 +753,7 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 		s.recordReviewOutcome(ctx, req, false, err.Error())
 		return s.fail(run, fmt.Errorf("launch provider: %w", err))
 	}
+	charmlog.Info("agent launched", "run_id", run.ID, "provider", req.Provider.Name())
 
 	waitErr := handle.Wait()
 	finished := time.Now()
@@ -711,6 +763,7 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 		run.Status = domain.RunStatusTimeout
 		reason := fmt.Sprintf("revise timed out after %d minutes", s.cfg.TimeoutMinutes)
 		logEvent(logFile, "run_timeout", map[string]any{"run_id": run.ID})
+		charmlog.Warn("run timed out", "run_id", run.ID, "pr", req.Task.ID)
 		s.recordReviewOutcome(ctx, req, false, reason)
 		if !s.cfg.PreserveOnFailure {
 			s.cleanup(run)
@@ -722,6 +775,7 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 		run.Status = domain.RunStatusFailed
 		run.ErrorMsg = waitErr.Error()
 		logEvent(logFile, "run_failed", map[string]any{"run_id": run.ID, "error": waitErr.Error()})
+		charmlog.Error("run failed", "run_id", run.ID, "pr", req.Task.ID, "error", waitErr)
 		s.recordReviewOutcome(ctx, req, false, "revision agent failed: "+waitErr.Error())
 		if !s.cfg.PreserveOnFailure {
 			s.cleanup(run)
@@ -731,6 +785,7 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 
 	run.Status = domain.RunStatusSucceeded
 	logEvent(logFile, "run_succeeded", map[string]any{"run_id": run.ID})
+	charmlog.Info("revision pushed", "run_id", run.ID, "pr", req.Task.ID, "branch", req.Task.Branch)
 
 	// On success, re-trigger QA review.
 	if req.ReviewSource != nil {

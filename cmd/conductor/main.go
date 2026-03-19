@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	charmlog "github.com/charmbracelet/log"
 	"github.com/spf13/cobra"
 
 	"github.com/haha-systems/conductor/internal/config"
@@ -50,10 +51,20 @@ func rootCmd() *cobra.Command {
 
 // runCmd starts the polling loop.
 func runCmd(cfgPath *string) *cobra.Command {
-	return &cobra.Command{
+	var verbose bool
+
+	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Start polling for tasks and running agents",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			charmlog.SetTimeFormat("15:04:05")
+			charmlog.SetReportCaller(false)
+			if verbose {
+				charmlog.SetLevel(charmlog.DebugLevel)
+			} else {
+				charmlog.SetLevel(charmlog.InfoLevel)
+			}
+
 			cfg, err := config.Load(*cfgPath)
 			if err != nil {
 				return err
@@ -65,6 +76,8 @@ func runCmd(cfgPath *string) *cobra.Command {
 			return startOrchestrator(ctx, cfg)
 		},
 	}
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable DEBUG-level logging")
+	return cmd
 }
 
 // collectProofCmd runs proof collection for a completed run.
@@ -176,16 +189,22 @@ func costCmd(cfgPath *string) *cobra.Command {
 
 // startOrchestrator wires together all components and runs the main loop.
 func startOrchestrator(ctx context.Context, cfg *config.Config) error {
-	slog.Info("conductor starting",
-		"max_concurrent_runs", cfg.Conductor.MaxConcurrentRuns,
-		"default_provider", cfg.Conductor.DefaultProvider,
-	)
-
 	// Build enabled providers.
 	providers := buildProviders(cfg)
 	if len(providers) == 0 {
 		return fmt.Errorf("no enabled providers configured")
 	}
+
+	providerNames := make([]string, 0, len(providers))
+	for name := range providers {
+		providerNames = append(providerNames, name)
+	}
+
+	charmlog.Info("conductor starting",
+		"providers", strings.Join(providerNames, ","),
+		"interval", fmt.Sprintf("%ds", cfg.Conductor.WorkIntervalSeconds),
+		"max_concurrent", cfg.Conductor.MaxConcurrentRuns,
+	)
 
 	// Build work source.
 	source, err := buildWorkSource(cfg)
@@ -230,7 +249,7 @@ func startOrchestrator(ctx context.Context, cfg *config.Config) error {
 		}()
 	}
 
-	slog.Info("conductor stopped")
+	charmlog.Info("conductor stopped")
 	return nil
 }
 
@@ -243,7 +262,7 @@ func executeTask(
 	source worksource.WorkSource,
 	hooks []string,
 ) {
-	log := slog.With("task_id", task.ID)
+	log := charmlog.With("task_id", task.ID)
 
 	route, err := rt.Route(task)
 	if err != nil {
@@ -252,12 +271,21 @@ func executeTask(
 	}
 
 	if route.RaceN > 1 {
+		providerNames := make([]string, len(route.Providers))
+		for i, p := range route.Providers {
+			providerNames[i] = p.Name()
+		}
+		log.Info("race started", "title", task.Title, "runners", route.RaceN, "providers", strings.Join(providerNames, ","))
 		executeRace(ctx, task, route, sup, collector, source, hooks, log)
 		return
 	}
 
 	p := route.Providers[0]
-	log.Info("task routed", "provider", p.Name())
+	personaName := ""
+	if route.Persona != nil {
+		personaName = route.Persona.Name
+	}
+	log.Info("task routed", "title", task.Title, "type", task.Type, "provider", p.Name(), "persona", personaName)
 	executeRun(ctx, task, p, route.Persona, sup, collector, source, hooks, log)
 }
 
@@ -270,7 +298,7 @@ func executeRace(
 	collector *proof.Collector,
 	source worksource.WorkSource,
 	hooks []string,
-	log *slog.Logger,
+	log *charmlog.Logger,
 ) {
 	type outcome struct {
 		result *supervisor.Result
@@ -331,7 +359,7 @@ func executeRun(
 	collector *proof.Collector,
 	source worksource.WorkSource,
 	hooks []string,
-	log *slog.Logger,
+	log *charmlog.Logger,
 ) {
 	run := &domain.Run{ID: newRunID(), TaskID: task.ID, Provider: p.Name()}
 	result := sup.Execute(ctx, supervisor.RunRequest{
@@ -371,7 +399,7 @@ func finishRun(
 	collector *proof.Collector,
 	source worksource.WorkSource,
 	hooks []string,
-	log *slog.Logger,
+	log *charmlog.Logger,
 ) {
 	log.Info("run succeeded", "run_id", run.ID)
 
@@ -422,7 +450,7 @@ func buildProviders(cfg *config.Config) map[string]provider.AgentProvider {
 			if pcfg.Binary != "" {
 				providers[name] = provider.NewCustomAdapter(name, pcfg.Binary, pcfg.ExtraArgs, pcfg.CostPer1kTokens)
 			} else {
-				slog.Warn("unknown provider type with no binary, skipping", "name", name)
+				charmlog.Warn("unknown provider type with no binary, skipping", "name", name)
 			}
 		}
 	}

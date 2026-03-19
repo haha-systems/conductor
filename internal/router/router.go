@@ -2,12 +2,13 @@ package router
 
 import (
 	"fmt"
-	"log/slog"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"github.com/haha-systems/conductor/internal/config"
 	"github.com/haha-systems/conductor/internal/domain"
@@ -92,7 +93,9 @@ func (r *Router) Route(task *domain.Task) (RouteResult, error) {
 		if err != nil {
 			return RouteResult{}, err
 		}
-		return RouteResult{Providers: []provider.AgentProvider{p}, RaceN: 1}, nil
+		result := RouteResult{Providers: []provider.AgentProvider{p}, RaceN: 1}
+		charmlog.Debug("route resolved", "task_id", task.ID, "provider", p.Name(), "strategy", "pinned_agent")
+		return result, nil
 	}
 
 	// 2. Routing strategy from front-matter overrides global config.
@@ -114,7 +117,9 @@ func (r *Router) Route(task *domain.Task) (RouteResult, error) {
 		if err != nil {
 			return RouteResult{}, err
 		}
-		return RouteResult{Providers: []provider.AgentProvider{p}, RaceN: 1, Persona: persona}, nil
+		result := RouteResult{Providers: []provider.AgentProvider{p}, RaceN: 1, Persona: persona}
+		charmlog.Debug("route resolved", "task_id", task.ID, "labels", strings.Join(task.Labels, ","), "persona", persona.Name, "provider", p.Name(), "strategy", "persona_route")
+		return result, nil
 	}
 
 	// 4. Label-based routing (checked before strategy).
@@ -124,13 +129,18 @@ func (r *Router) Route(task *domain.Task) (RouteResult, error) {
 			if err != nil {
 				return RouteResult{}, err
 			}
-			return RouteResult{Providers: []provider.AgentProvider{p}, RaceN: 1}, nil
+			result := RouteResult{Providers: []provider.AgentProvider{p}, RaceN: 1}
+			charmlog.Debug("route resolved", "task_id", task.ID, "labels", strings.Join(task.Labels, ","), "provider", p.Name(), "strategy", "label_route")
+			return result, nil
 		}
 	}
 
 	result, err := r.applyStrategy(strategy)
 	if err != nil {
 		return RouteResult{}, err
+	}
+	if len(result.Providers) > 0 {
+		charmlog.Debug("route resolved", "task_id", task.ID, "provider", result.Providers[0].Name(), "strategy", strategy)
 	}
 	return result, nil
 }
@@ -144,7 +154,7 @@ func (r *Router) resolvePersona(task *domain.Task) *config.PersonaConfig {
 		if p, ok := r.personas[name]; ok {
 			return &p
 		}
-		slog.Warn("unknown persona in task front-matter, falling through", "persona", name)
+		charmlog.Warn("unknown persona in task front-matter, falling through", "persona", name)
 		return nil
 	}
 
@@ -154,7 +164,7 @@ func (r *Router) resolvePersona(task *domain.Task) *config.PersonaConfig {
 			if p, ok := r.personas[personaName]; ok {
 				return &p
 			}
-			slog.Warn("persona_routes references unknown persona, falling through", "persona", personaName, "label", label)
+			charmlog.Warn("persona_routes references unknown persona, falling through", "persona", personaName, "label", label)
 		}
 	}
 

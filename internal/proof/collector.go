@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	charmlog "github.com/charmbracelet/log"
+
 	"github.com/haha-systems/conductor/internal/domain"
 )
 
@@ -47,6 +49,7 @@ func New(cfg Config) *Collector {
 // provider may be nil; if non-nil and able to estimate cost, CostUSD is populated.
 // notifier may be nil; if non-nil and the bundle has a PRUrl, MarkPRNeedsReview is called.
 func (c *Collector) Collect(ctx context.Context, run *domain.Run, task *domain.Task, provider CostEstimator, notifier ReviewNotifier) (*domain.ProofBundle, error) {
+	charmlog.Info("proof collecting", "run_id", run.ID, "task_id", run.TaskID)
 	started := time.Now()
 
 	bundle := &domain.ProofBundle{
@@ -103,6 +106,14 @@ func (c *Collector) Collect(ctx context.Context, run *domain.Run, task *domain.T
 	if err := writeSummary(summaryPath, bundle); err != nil {
 		return nil, fmt.Errorf("write summary: %w", err)
 	}
+
+	diffLines := fmt.Sprintf("+%d/-%d", bundle.Diff.Insertions, bundle.Diff.Deletions)
+	charmlog.Info("proof collected",
+		"run_id", run.ID,
+		"pr", bundle.PRUrl,
+		"diff_lines", diffLines,
+		"cost", fmt.Sprintf("$%.4f", bundle.CostUSD),
+	)
 
 	return bundle, nil
 }

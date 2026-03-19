@@ -2,10 +2,11 @@ package worksource
 
 import (
 	"context"
-	"log/slog"
 	"slices"
 	"sync"
 	"time"
+
+	charmlog "github.com/charmbracelet/log"
 
 	"github.com/haha-systems/conductor/internal/domain"
 )
@@ -73,41 +74,50 @@ func (p *TaskPoller) Done() {
 func (p *TaskPoller) poll(ctx context.Context, out chan<- *domain.Task) {
 	issueTasks, err := p.source.Poll(ctx)
 	if err != nil {
-		slog.Error("poll failed", "source", p.source.Name(), "error", err)
+		charmlog.Error("poll failed", "source", p.source.Name(), "error", err)
 	}
 
 	prTasks, err := p.source.ListOpenPRs(ctx)
 	if err != nil {
-		slog.Error("list open PRs failed", "source", p.source.Name(), "error", err)
+		charmlog.Error("list open PRs failed", "source", p.source.Name(), "error", err)
 	}
 
 	reviewTasks, err := p.source.ListPRsNeedingReview(ctx)
 	if err != nil {
-		slog.Error("list PRs needing review failed", "source", p.source.Name(), "error", err)
+		charmlog.Error("list PRs needing review failed", "source", p.source.Name(), "error", err)
 	}
 
 	reviseTasks, err := p.source.ListPRsNeedingRevision(ctx)
 	if err != nil {
-		slog.Error("list PRs needing revision failed", "source", p.source.Name(), "error", err)
+		charmlog.Error("list PRs needing revision failed", "source", p.source.Name(), "error", err)
 	}
 
 	tasks := slices.Concat(issueTasks, prTasks, reviewTasks, reviseTasks)
 
+	charmlog.Debug("poll tick",
+		"source", p.source.Name(),
+		"issues", len(issueTasks),
+		"rebases", len(prTasks),
+		"reviews", len(reviewTasks),
+		"revisions", len(reviseTasks),
+		"total", len(tasks),
+	)
+
 	for _, task := range tasks {
 		if !p.tryAcquireSlot() {
 			// Back-pressure: at capacity, leave task for next poll.
-			slog.Debug("at capacity, skipping task", "task_id", task.ID)
+			charmlog.Debug("at capacity", "max", p.cfg.MaxConcurrentRuns, "skipping", task.ID)
 			return
 		}
 
 		if err := p.source.Claim(ctx, task); err != nil {
 			p.releaseSlot()
-			slog.Error("claim failed", "task_id", task.ID, "error", err)
+			charmlog.Error("claim failed", "task_id", task.ID, "error", err)
 			continue
 		}
 
 		task.Status = domain.TaskStatusClaimed
-		slog.Info("task claimed", "task_id", task.ID, "source", p.source.Name())
+		charmlog.Info("task claimed", "id", task.ID, "title", task.Title, "type", task.Type, "source", p.source.Name())
 
 		select {
 		case out <- task:
@@ -138,4 +148,3 @@ func (p *TaskPoller) CurrentRunning() int {
 	defer p.mu.Unlock()
 	return p.running
 }
-
