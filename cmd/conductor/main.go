@@ -318,7 +318,7 @@ func executeRace(
 	}
 
 	log.Info("race winner", "provider", winnerProvider.Name(), "run_id", winner.Run.ID, "failures", failures)
-	finishRun(ctx, winner.Run, task, collector, source, hooks, log)
+	finishRun(ctx, winner.Run, task, winnerProvider, collector, source, hooks, log)
 }
 
 func executeRun(
@@ -352,13 +352,14 @@ func executeRun(
 	if task.Type == domain.TaskTypeRebase {
 		return // outcome already recorded by supervisor via RecordRebaseOutcome
 	}
-	finishRun(ctx, run, task, collector, source, hooks, log)
+	finishRun(ctx, run, task, p, collector, source, hooks, log)
 }
 
 func finishRun(
 	ctx context.Context,
 	run *domain.Run,
 	task *domain.Task,
+	p provider.AgentProvider,
 	collector *proof.Collector,
 	source worksource.WorkSource,
 	hooks []string,
@@ -366,7 +367,7 @@ func finishRun(
 ) {
 	log.Info("run succeeded", "run_id", run.ID)
 
-	bundle, err := collector.Collect(ctx, run, task)
+	bundle, err := collector.Collect(ctx, run, task, p)
 	if err != nil {
 		log.Error("proof collection failed", "run_id", run.ID, "error", err)
 		source.PostResult(ctx, task, fmt.Sprintf("Run succeeded but proof collection failed: %v", err)) //nolint:errcheck

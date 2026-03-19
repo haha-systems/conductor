@@ -15,6 +15,11 @@ import (
 	"github.com/haha-systems/conductor/internal/domain"
 )
 
+// CostEstimator is implemented by provider adapters that can estimate run cost.
+type CostEstimator interface {
+	CostEstimate(promptLen int) (float64, bool)
+}
+
 // Config controls what proof collection does.
 type Config struct {
 	RequireCIPass bool
@@ -34,7 +39,8 @@ func New(cfg Config) *Collector {
 
 // Collect runs CI, computes diff stats, optionally opens a PR, and writes
 // proof/summary.json into the run's worktree. It returns the ProofBundle.
-func (c *Collector) Collect(ctx context.Context, run *domain.Run, task *domain.Task) (*domain.ProofBundle, error) {
+// provider may be nil; if non-nil and able to estimate cost, CostUSD is populated.
+func (c *Collector) Collect(ctx context.Context, run *domain.Run, task *domain.Task, provider CostEstimator) (*domain.ProofBundle, error) {
 	started := time.Now()
 
 	bundle := &domain.ProofBundle{
@@ -65,10 +71,19 @@ func (c *Collector) Collect(ctx context.Context, run *domain.Run, task *domain.T
 		bundle.DurationSeconds = time.Since(started).Seconds()
 	}
 
-	// 4. Merge agent-written metadata (pr_url, walkthrough, etc.).
+	// 4. Cost estimate from provider (best-effort; zero if not available).
+	if provider != nil {
+		if promptData, err := os.ReadFile(filepath.Join(run.WorktreePath, ".conductor-task.md")); err == nil {
+			if cost, ok := provider.CostEstimate(len(promptData)); ok {
+				bundle.CostUSD = cost
+			}
+		}
+	}
+
+	// 5. Merge agent-written metadata (pr_url, walkthrough, etc.).
 	readAgentMetadata(run.WorktreePath, bundle)
 
-	// 5. Write summary.json.
+	// 6. Write summary.json.
 	summaryPath := filepath.Join(run.WorktreePath, "proof", "summary.json")
 	if err := writeSummary(summaryPath, bundle); err != nil {
 		return nil, fmt.Errorf("write summary: %w", err)
