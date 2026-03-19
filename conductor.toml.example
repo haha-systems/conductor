@@ -8,6 +8,21 @@ repo = "your-org/your-repo"
 label_filter = ["conductor"]
 # allowed_authors = ["your-github-username"]  # optional: only claim issues from these users
 
+# Per-persona GitHub bot accounts (optional).
+#
+# Each persona can have its own GitHub account for opening PRs and posting
+# code reviews. Create a GitHub account per persona, generate a fine-grained
+# PAT with "Pull requests: read/write" and "Issues: read" scopes, and export
+# it as the named env var before running conductor.
+#
+# The env var name is set in each persona's persona.toml under github_token_env.
+# If not configured, the persona uses the conductor's own GITHUB_TOKEN.
+#
+# Example:
+#   export GITHUB_TOKEN_LEAD_ENGINEER="ghp_..."
+#   export GITHUB_TOKEN_QA_ENGINEER="ghp_..."
+#   export GITHUB_TOKEN_DEBUGGING_SPECIALIST="ghp_..."
+
 [providers.claude]
 enabled = true
 binary = "claude"
