@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	charmlog "github.com/charmbracelet/log"
 	gh "github.com/google/go-github/v68/github"
 	"golang.org/x/oauth2"
@@ -48,14 +50,35 @@ func NewGitHubSource(token, repo string, labelFilter []string, allowedAuthors []
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, fmt.Errorf("repo must be in owner/repo format, got %q", repo)
 	}
+	owner, repoName := parts[0], parts[1]
 
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(context.Background(), ts)
+	var tc *http.Client
+	appIDStr, keyPath := os.Getenv("GH_APP_APP_ID"), os.Getenv("GH_APP_PRIVATE_KEY_PATH")
+	if appIDStr != "" && keyPath != "" {
+		id, err := strconv.ParseInt(appIDStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("GH_APP_APP_ID: %w", err)
+		}
+		atr, err := ghinstallation.NewAppsTransportKeyFromFile(http.DefaultTransport, id, keyPath)
+		if err != nil {
+			return nil, fmt.Errorf("github app transport: %w", err)
+		}
+		appClient := gh.NewClient(&http.Client{Transport: atr})
+		inst, _, err := appClient.Apps.FindRepositoryInstallation(context.Background(), owner, repoName)
+		if err != nil {
+			return nil, fmt.Errorf("find installation: %w", err)
+		}
+		itr := ghinstallation.NewFromAppsTransport(atr, inst.GetID())
+		tc = &http.Client{Transport: itr}
+	} else {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		tc = oauth2.NewClient(context.Background(), ts)
+	}
 
 	return &GitHubSource{
 		client:         gh.NewClient(tc),
-		owner:          parts[0],
-		repo:           parts[1],
+		owner:          owner,
+		repo:           repoName,
 		labelFilter:    labelFilter,
 		allowedAuthors: allowedAuthors,
 	}, nil
