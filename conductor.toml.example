@@ -29,6 +29,12 @@ binary = "claude"
 extra_args = ["--model", "claude-sonnet-4-6", "--dangerously-skip-permissions"]
 cost_per_1k_tokens = 0.003
 
+# [providers.gemini]
+# enabled = false
+# binary = "gemini"
+# extra_args = ["--yolo"]
+# cost_per_1k_tokens = 0.0
+
 [routing]
 strategy = "round-robin"
 

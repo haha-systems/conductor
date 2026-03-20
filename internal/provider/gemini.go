@@ -1,6 +1,10 @@
 package provider
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"os"
+)
 
 // GeminiCLIAdapter invokes Google's `gemini` CLI.
 type GeminiCLIAdapter struct{ shell shellAdapter }
@@ -26,5 +30,11 @@ func (a *GeminiCLIAdapter) Name() string                                    { re
 func (a *GeminiCLIAdapter) Capabilities() []Capability                     { return a.shell.adapterCapabilities() }
 func (a *GeminiCLIAdapter) CostEstimate(n int) (float64, bool)             { return a.shell.adapterCostEstimate(n) }
 func (a *GeminiCLIAdapter) Run(ctx context.Context, rc RunContext) (RunHandle, error) {
-	return a.shell.adapterRun(ctx, rc)
+	f, err := os.Open(rc.TaskFile)
+	if err != nil {
+		return nil, fmt.Errorf("gemini: open task file: %w", err)
+	}
+	// Pipe the task file as stdin. --prompt "" triggers non-interactive
+	// (headless) mode; Gemini appends the --prompt value to stdin content.
+	return a.shell.adapterRunWithStdin(ctx, rc, f, "--prompt", "")
 }
