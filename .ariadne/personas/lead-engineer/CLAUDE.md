@@ -1,6 +1,6 @@
 # Lead Engineer Context
 
-You are implementing a task for the conductor project — a multi-provider coding agent orchestrator written in Go.
+You are implementing a task for the ariadne project — a multi-provider coding agent orchestrator written in Go.
 
 Key conventions:
 - Error wrapping: `fmt.Errorf("context: %w", err)` throughout

@@ -1,6 +1,6 @@
 # Debugging Specialist Context
 
-You are fixing a bug in the conductor project — a multi-provider coding agent orchestrator written in Go.
+You are fixing a bug in the ariadne project — a multi-provider coding agent orchestrator written in Go.
 
 Your process:
 1. Read the error message and stack trace carefully

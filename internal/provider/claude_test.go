@@ -85,14 +85,14 @@ func TestClaudeCodeAdapter_Run_EchoCommand(t *testing.T) {
 
 func TestBuildEnv_ContainsTaskFile(t *testing.T) {
 	rc := RunContext{
-		TaskFile: "/tmp/conductor-task.md",
+		TaskFile: "/tmp/ariadne-task.md",
 		Env:      map[string]string{"FOO": "bar"},
 	}
 	env := buildEnv(rc)
 
 	var hasTaskFile, hasFoo bool
 	for _, e := range env {
-		if e == "CONDUCTOR_TASK_FILE=/tmp/conductor-task.md" {
+		if e == "ARIADNE_TASK_FILE=/tmp/ariadne-task.md" {
 			hasTaskFile = true
 		}
 		if e == "FOO=bar" {
@@ -100,7 +100,7 @@ func TestBuildEnv_ContainsTaskFile(t *testing.T) {
 		}
 	}
 	if !hasTaskFile {
-		t.Error("CONDUCTOR_TASK_FILE not set in env")
+		t.Error("ARIADNE_TASK_FILE not set in env")
 	}
 	if !hasFoo {
 		t.Error("FOO not set in env")

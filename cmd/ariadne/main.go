@@ -35,7 +35,7 @@ func rootCmd() *cobra.Command {
 	var cfgPath string
 
 	root := &cobra.Command{
-		Use:   "conductor",
+		Use:   "ariadne",
 		Short: "Multi-provider coding agent orchestrator",
 	}
 	root.PersistentFlags().StringVar(&cfgPath, "config", "ariadne.toml", "path to ariadne.toml")
@@ -200,10 +200,10 @@ func startOrchestrator(ctx context.Context, cfg *config.Config) error {
 		providerNames = append(providerNames, name)
 	}
 
-	charmlog.Info("conductor starting",
+	charmlog.Info("ariadne starting",
 		"providers", strings.Join(providerNames, ","),
-		"interval", fmt.Sprintf("%ds", cfg.Conductor.WorkIntervalSeconds),
-		"max_concurrent", cfg.Conductor.MaxConcurrentRuns,
+		"interval", fmt.Sprintf("%ds", cfg.Ariadne.WorkIntervalSeconds),
+		"max_concurrent", cfg.Ariadne.MaxConcurrentRuns,
 	)
 
 	// Build work source.
@@ -219,7 +219,7 @@ func startOrchestrator(ctx context.Context, cfg *config.Config) error {
 		cfg.Routing.PersonaRoutes,
 		cfg.Personas,
 		cfg.Routing.Strategy,
-		cfg.Conductor.DefaultProvider,
+		cfg.Ariadne.DefaultProvider,
 	)
 
 	sup := supervisor.New(supervisor.Config{
@@ -236,8 +236,8 @@ func startOrchestrator(ctx context.Context, cfg *config.Config) error {
 	})
 
 	poller := worksource.NewPoller(source, worksource.PollerConfig{
-		IntervalSeconds:   cfg.Conductor.WorkIntervalSeconds,
-		MaxConcurrentRuns: cfg.Conductor.MaxConcurrentRuns,
+		IntervalSeconds:   cfg.Ariadne.WorkIntervalSeconds,
+		MaxConcurrentRuns: cfg.Ariadne.MaxConcurrentRuns,
 	})
 
 	taskCh := poller.Run(ctx)
@@ -249,7 +249,7 @@ func startOrchestrator(ctx context.Context, cfg *config.Config) error {
 		}()
 	}
 
-	charmlog.Info("conductor stopped")
+	charmlog.Info("ariadne stopped")
 	return nil
 }
 

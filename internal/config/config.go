@@ -10,7 +10,7 @@ import (
 
 // Config is the top-level ariadne.toml structure.
 type Config struct {
-	Conductor   ConductorConfig           `toml:"conductor"`
+	Ariadne   AriadneConfig  `toml:"ariadne"`
 	WorkSources WorkSourcesConfig         `toml:"work_sources"`
 	Providers   map[string]ProviderConfig `toml:"providers"`
 	Routing     RoutingConfig             `toml:"routing"`
@@ -21,7 +21,7 @@ type Config struct {
 	Personas map[string]PersonaConfig
 }
 
-type ConductorConfig struct {
+type AriadneConfig struct {
 	MaxConcurrentRuns   int    `toml:"max_concurrent_runs"`
 	DefaultProvider     string `toml:"default_provider"`
 	WorkIntervalSeconds int    `toml:"work_interval_seconds"`
@@ -111,7 +111,7 @@ func Load(path string) (*Config, error) {
 
 func defaults() *Config {
 	return &Config{
-		Conductor: ConductorConfig{
+		Ariadne: AriadneConfig{
 			MaxConcurrentRuns:   4,
 			DefaultProvider:     "claude",
 			WorkIntervalSeconds: 30,
@@ -136,10 +136,10 @@ func defaults() *Config {
 }
 
 func validate(cfg *Config) error {
-	if cfg.Conductor.MaxConcurrentRuns <= 0 {
+	if cfg.Ariadne.MaxConcurrentRuns <= 0 {
 		return fmt.Errorf("max_concurrent_runs must be > 0")
 	}
-	if cfg.Conductor.DefaultProvider == "" {
+	if cfg.Ariadne.DefaultProvider == "" {
 		return fmt.Errorf("default_provider must be set")
 	}
 	if cfg.Sandbox.TimeoutMinutes <= 0 {

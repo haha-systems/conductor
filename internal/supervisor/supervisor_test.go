@@ -146,7 +146,7 @@ func TestBuildTaskPrompt_NoPersona(t *testing.T) {
 		Description: "Details here.",
 		Source:      "github",
 		SourceURL:   "https://github.com/org/repo/issues/42",
-		Labels:      []string{"conductor"},
+		Labels: []string{"ariadne"},
 	}
 	prompt := string(buildTaskPrompt(task, "", nil))
 	if !strings.Contains(prompt, "# Task: Do the thing") {

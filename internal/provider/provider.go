@@ -19,7 +19,7 @@ type RunContext struct {
 	// RepoPath is the absolute path to the isolated git worktree.
 	RepoPath string
 	// TaskFile is the path to the file containing the task prompt.
-	// Set as $CONDUCTOR_TASK_FILE in the subprocess environment.
+	// Set as $ARIADNE_TASK_FILE in the subprocess environment.
 	TaskFile string
 	// Env holds additional environment variables for the subprocess.
 	// These are merged on top of the current process environment.

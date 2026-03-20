@@ -8,7 +8,7 @@ import (
 
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "conductor-*.toml")
+	f, err := os.CreateTemp(t.TempDir(), "ariadne-*.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,18 +21,18 @@ func writeTemp(t *testing.T, content string) string {
 
 func TestLoad_Defaults(t *testing.T) {
 	path := writeTemp(t, `
-[conductor]
+[ariadne]
 default_provider = "claude"
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Conductor.MaxConcurrentRuns != 4 {
-		t.Errorf("expected default max_concurrent_runs=4, got %d", cfg.Conductor.MaxConcurrentRuns)
+	if cfg.Ariadne.MaxConcurrentRuns != 4 {
+		t.Errorf("expected default max_concurrent_runs=4, got %d", cfg.Ariadne.MaxConcurrentRuns)
 	}
-	if cfg.Conductor.WorkIntervalSeconds != 30 {
-		t.Errorf("expected default work_interval_seconds=30, got %d", cfg.Conductor.WorkIntervalSeconds)
+	if cfg.Ariadne.WorkIntervalSeconds != 30 {
+		t.Errorf("expected default work_interval_seconds=30, got %d", cfg.Ariadne.WorkIntervalSeconds)
 	}
 	if cfg.Sandbox.TimeoutMinutes != 45 {
 		t.Errorf("expected default timeout_minutes=45, got %d", cfg.Sandbox.TimeoutMinutes)
@@ -44,14 +44,14 @@ default_provider = "claude"
 
 func TestLoad_FullConfig(t *testing.T) {
 	path := writeTemp(t, `
-[conductor]
+[ariadne]
 max_concurrent_runs = 2
 default_provider = "codex"
 work_interval_seconds = 60
 
 [work_sources.github]
 repo = "org/repo"
-label_filter = ["conductor"]
+label_filter = ["ariadne"]
 
 [providers.claude]
 enabled = true
@@ -78,8 +78,8 @@ preserve_on_failure = true
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Conductor.MaxConcurrentRuns != 2 {
-		t.Errorf("got max_concurrent_runs=%d", cfg.Conductor.MaxConcurrentRuns)
+	if cfg.Ariadne.MaxConcurrentRuns != 2 {
+		t.Errorf("got max_concurrent_runs=%d", cfg.Ariadne.MaxConcurrentRuns)
 	}
 	if cfg.WorkSources.GitHub == nil {
 		t.Fatal("expected github work source")
@@ -104,7 +104,7 @@ preserve_on_failure = true
 
 func TestLoad_PersonaRoutes(t *testing.T) {
 	path := writeTemp(t, `
-[conductor]
+[ariadne]
 default_provider = "claude"
 
 [routing.persona_routes]
@@ -233,7 +233,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{
 			name: "zero max_concurrent_runs",
 			content: `
-[conductor]
+[ariadne]
 default_provider = "claude"
 max_concurrent_runs = 0
 `,
@@ -241,7 +241,7 @@ max_concurrent_runs = 0
 		{
 			name: "empty default_provider",
 			content: `
-[conductor]
+[ariadne]
 max_concurrent_runs = 4
 default_provider = ""
 `,
@@ -249,7 +249,7 @@ default_provider = ""
 		{
 			name: "enabled provider without binary",
 			content: `
-[conductor]
+[ariadne]
 default_provider = "claude"
 
 [providers.claude]

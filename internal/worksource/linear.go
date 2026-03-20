@@ -52,7 +52,7 @@ query($teamId: String!, $states: [String!]!) {
   issues(filter: {
     team: { id: { eq: $teamId } }
     state: { name: { in: $states } }
-    labels: { name: { nin: ["conductor:claimed", "conductor:running"] } }
+    labels: { name: { nin: ["ariadne:claimed", "ariadne:running"] } }
   }) {
     nodes {
       id
@@ -94,10 +94,10 @@ query($teamId: String!, $states: [String!]!) {
 	return tasks, nil
 }
 
-// Claim adds the "conductor:claimed" label to the issue.
+// Claim adds the "ariadne:claimed" label to the issue.
 func (s *LinearSource) Claim(ctx context.Context, task *domain.Task) error {
 	// First, ensure the label exists and get its ID.
-	labelID, err := s.ensureLabel(ctx, "conductor:claimed", "#e74c3c")
+	labelID, err := s.ensureLabel(ctx, "ariadne:claimed", "#e74c3c")
 	if err != nil {
 		return fmt.Errorf("claim %s: ensure label: %w", task.ID, err)
 	}

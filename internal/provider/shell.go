@@ -77,7 +77,7 @@ func (h *processHandle) Cancel() error {
 // buildEnv merges RunContext.Env on top of the current process environment.
 func buildEnv(rc RunContext) []string {
 	env := os.Environ()
-	env = append(env, fmt.Sprintf("CONDUCTOR_TASK_FILE=%s", rc.TaskFile))
+	env = append(env, fmt.Sprintf("ARIADNE_TASK_FILE=%s", rc.TaskFile))
 	for k, v := range rc.Env {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}

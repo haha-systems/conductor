@@ -85,7 +85,7 @@ func TestRouter_PersonaLabelRoute(t *testing.T) {
 	personas := makePersonas("lead-engineer")
 	personaRoutes := map[string]string{"feature": "lead-engineer"}
 	r := NewWithPersonas(makeProviders("claude"), nil, personaRoutes, personas, "round-robin", "claude")
-	task := &domain.Task{Labels: []string{"conductor", "feature"}}
+	task := &domain.Task{Labels: []string{"ariadne", "feature"}}
 	result, err := r.Route(task)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestRouter_Pinned_UnknownProvider(t *testing.T) {
 func TestRouter_LabelBased(t *testing.T) {
 	routes := map[string]string{"big-context": "gemini"}
 	r := New(makeProviders("claude", "gemini"), routes, "round-robin", "claude")
-	task := &domain.Task{Labels: []string{"conductor", "big-context"}}
+	task := &domain.Task{Labels: []string{"ariadne", "big-context"}}
 	result, err := r.Route(task)
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestRouter_Persona_LabelRoute(t *testing.T) {
 	}
 	personaRoutes := map[string]string{"planning": "project-manager"}
 	r := NewWithPersonas(makeProviders("claude", "gemini"), nil, personaRoutes, personas, "round-robin", "claude")
-	task := &domain.Task{Labels: []string{"conductor", "planning"}}
+	task := &domain.Task{Labels: []string{"ariadne", "planning"}}
 	result, err := r.Route(task)
 	if err != nil {
 		t.Fatal(err)
