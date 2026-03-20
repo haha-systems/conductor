@@ -20,19 +20,19 @@ jobs:
           cache: true
       - name: Build (non-Windows)
         if: runner.os != 'Windows'
-        run: go build -o conductor-${{ runner.os }} ./cm./ariadne
+        run: go build -o ariadne-${{ runner.os }} ./cmd/ariadne
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: go build -o conductor-${{ runner.os }}.exe ./cm./ariadne
+        run: go build -o ariadne-${{ runner.os }}.exe ./cmd/ariadne
       - name: Upload artifact (non-Windows)
         if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: conductor-${{ runner.os }}
-          path: conductor-${{ runner.os }}
+          name: ariadne-${{ runner.os }}
+          path: ariadne-${{ runner.os }}
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: conductor-${{ runner.os }}
-          path: conductor-${{ runner.os }}.exe
+          name: ariadne-${{ runner.os }}
+          path: ariadne-${{ runner.os }}.exe

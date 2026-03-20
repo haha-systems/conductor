@@ -12,19 +12,19 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-            artifact: conductor-linux-amd64
+            artifact: ariadne-linux-amd64
           - goos: linux
             goarch: arm64
-            artifact: conductor-linux-arm64
+            artifact: ariadne-linux-arm64
           - goos: darwin
             goarch: amd64
-            artifact: conductor-darwin-amd64
+            artifact: ariadne-darwin-amd64
           - goos: darwin
             goarch: arm64
-            artifact: conductor-darwin-arm64
+            artifact: ariadne-darwin-arm64
           - goos: windows
             goarch: amd64
-            artifact: conductor-windows-amd64.exe
+            artifact: ariadne-windows-amd64.exe
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           go build -ldflags="-s -w -X main.version=${REF_NAME}" \
-            -o "${ARTIFACT}" ./cm./ariadne
+            -o "${ARTIFACT}" ./cmd/ariadne
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
