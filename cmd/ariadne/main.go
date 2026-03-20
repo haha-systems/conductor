@@ -310,6 +310,7 @@ func executeRace(
 
 	ch := make(chan outcome, len(route.Providers))
 
+	ts := tokenSource(source)
 	for _, p := range route.Providers {
 		go func() {
 			run := &domain.Run{ID: newRunID(), TaskID: task.ID, Provider: p.Name()}
@@ -320,6 +321,7 @@ func executeRace(
 				Persona:      route.Persona,
 				Source:       source,
 				ReviewSource: source,
+				TokenSource:  ts,
 			})
 			ch <- outcome{result: result, p: p}
 		}()
@@ -369,6 +371,7 @@ func executeRun(
 		Persona:      persona,
 		Source:       source,
 		ReviewSource: source,
+		TokenSource:  tokenSource(source),
 	})
 	if result.Err != nil {
 		log.Error("run failed", "run_id", run.ID, "error", result.Err)
@@ -473,6 +476,15 @@ func buildWorkSource(cfg *config.Config) (worksource.WorkSource, error) {
 		return worksource.NewLinearSource(token, cfg.WorkSources.Linear.TeamID, cfg.WorkSources.Linear.StateFilter)
 	}
 	return nil, fmt.Errorf("no work source configured — add [work_sources.github] or [work_sources.linear] to ariadne.toml")
+}
+
+// tokenSource extracts a supervisor.TokenSource from a WorkSource if the
+// underlying implementation supports it. Returns nil for non-GitHub sources.
+func tokenSource(ws worksource.WorkSource) supervisor.TokenSource {
+	if ts, ok := ws.(supervisor.TokenSource); ok {
+		return ts
+	}
+	return nil
 }
 
 func repoRoot() string {

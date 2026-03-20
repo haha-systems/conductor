@@ -9,7 +9,23 @@ resolved in-session.
 
 - **Worktree**: your isolated repo copy — work only here.
 - **Task**: see the header above for title, source URL, labels, and description.
-- **Tools**: `gh` CLI, `git`, and any repo-specific tooling.
+- **Tools**: GitHub MCP server (for all GitHub operations), `git`, and any repo-specific tooling.
+
+## GitHub Operations
+
+Use the GitHub MCP server tools for all GitHub interactions — do **not** use the `gh` CLI.
+
+| Operation | MCP tool |
+|-----------|----------|
+| Read an issue | `get_issue` |
+| List issues | `list_issues` |
+| Post a comment | `create_issue_comment` |
+| Add labels | `add_labels_to_issue` |
+| Create a PR | `create_pull_request` |
+| Read a PR | `get_pull_request` |
+| Merge a PR | `merge_pull_request` |
+| Check PR CI status | `get_pull_request_checks` |
+| List PR comments | `get_pull_request_comments` |
 
 ## Progress tracking
 
@@ -44,14 +60,14 @@ Create this file at `.ariadne/workpad.md` at the start of every run:
 
 ## Step 0 — Orient
 
-1. Read the issue: `gh issue view <number> --repo <owner/repo> --comments`
+1. Read the issue using the `get_issue` MCP tool.
 2. Check current state and route:
    - **Backlog** → stop; wait for a human to move it.
    - **Todo / In Progress** → continue below.
    - **Human Review** → poll for review feedback; if changes requested, move to Rework.
-   - **Merging** → rebase on main, confirm CI green, merge via `gh pr merge --rebase --delete-branch`.
+   - **Merging** → rebase on main, confirm CI green, merge via `merge_pull_request` MCP tool.
    - **Done / Cancelled** → nothing to do; stop.
-3. Move issue to **In Progress** if it isn't already.
+3. Move issue to **In Progress** if it isn't already (use `add_labels_to_issue`).
 4. Create `.ariadne/workpad.md` (fresh run) or open and reconcile it (retry).
 5. Sync: `git fetch origin && git rebase origin/main` — record resulting HEAD SHA in Notes.
 
@@ -77,15 +93,14 @@ Create this file at `.ariadne/workpad.md` at the start of every run:
 ## Step 4 — PR and handoff
 
 1. Push branch and open a PR targeting `main`. Include `Closes #<issue-number>`
-   in the PR body (the issue number is in the task header above):
-   `gh pr create --title "..." --body "Closes #N\n\n..." --repo <owner/repo>`
+   in the PR body. Use the `create_pull_request` MCP tool.
 2. Capture the PR URL and write it to `.ariadne/metadata.json`:
    ```json
    {"pr_url": "https://github.com/org/repo/pull/N"}
    ```
 3. Attach the PR to the issue.
-4. Poll PR checks — loop until green or until a failure requires a code fix.
-5. Run a PR feedback sweep (inline comments + review summaries); address or
+4. Poll PR checks using `get_pull_request_checks` — loop until green or until a failure requires a code fix.
+5. Read inline comments and review summaries via `get_pull_request_comments`; address or
    explicitly respond to every actionable comment.
 6. Move issue to **Human Review**.
 
@@ -93,7 +108,7 @@ Create this file at `.ariadne/workpad.md` at the start of every run:
 
 Treat Rework as a full reset, not a patch:
 
-1. Read the full issue and all comments to understand what to do differently.
+1. Read the full issue and all comments using `get_issue` and `get_pull_request_comments`.
 2. Close the existing PR.
 3. Delete `.ariadne/workpad.md`.
 4. Create a fresh branch from `origin/main`.

@@ -35,5 +35,9 @@ func (a *ClaudeCodeAdapter) Run(ctx context.Context, rc RunContext) (RunHandle, 
 	if err != nil {
 		return nil, fmt.Errorf("claude: open task file: %w", err)
 	}
-	return a.shell.adapterRunWithStdin(ctx, rc, f, "--print")
+	args := []string{"--print"}
+	if rc.MCPConfigPath != "" {
+		args = append(args, "--mcp-config", rc.MCPConfigPath)
+	}
+	return a.shell.adapterRunWithStdin(ctx, rc, f, args...)
 }

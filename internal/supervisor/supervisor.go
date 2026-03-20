@@ -20,6 +20,12 @@ import (
 	"github.com/haha-systems/ariadne/internal/provider"
 )
 
+// TokenSource is satisfied by any WorkSource that can supply a GitHub API token.
+// The supervisor uses it to authenticate the GitHub MCP server process.
+type TokenSource interface {
+	Token(ctx context.Context) (string, error)
+}
+
 // RebaseRecorder is satisfied by any WorkSource that supports rebase outcome
 // recording. It is used by the supervisor without importing the worksource package.
 type RebaseRecorder interface {
@@ -46,6 +52,8 @@ type RunRequest struct {
 	Source RebaseRecorder
 	// ReviewSource is used by review/revise tasks to record outcomes. Nil is safe for other task types.
 	ReviewSource ReviewRecorder
+	// TokenSource provides a GitHub API token for the MCP server. Nil disables MCP server injection.
+	TokenSource TokenSource
 }
 
 // Result is returned by the supervisor after a run terminates.
@@ -146,12 +154,20 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 	// 6. Build env: merge global + per-task.
 	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
 
+	mcpConfigPath, mcpCleanup, err := writeMCPConfig(ctx, req.TokenSource)
+	if err != nil {
+		s.cleanup(run)
+		return s.fail(run, fmt.Errorf("write MCP config: %w", err))
+	}
+	defer mcpCleanup()
+
 	rc := provider.RunContext{
 		RepoPath:       worktreePath,
 		TaskFile:       taskFile,
 		Env:            env,
 		LogWriter:      logWriter,
 		TimeoutSeconds: int(timeout.Seconds()),
+		MCPConfigPath:  mcpConfigPath,
 	}
 
 	// 7. Launch provider.
@@ -534,12 +550,22 @@ func (s *Supervisor) executeRebase(ctx context.Context, req RunRequest) *Result 
 	defer cancel()
 
 	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
+
+	mcpConfigPath, mcpCleanup, err := writeMCPConfig(ctx, req.TokenSource)
+	if err != nil {
+		s.cleanup(run)
+		s.recordRebaseOutcome(ctx, req, false, err.Error())
+		return s.fail(run, fmt.Errorf("write MCP config: %w", err))
+	}
+	defer mcpCleanup()
+
 	rc := provider.RunContext{
 		RepoPath:       worktreePath,
 		TaskFile:       taskFile,
 		Env:            env,
 		LogWriter:      logWriter,
 		TimeoutSeconds: int(timeout.Seconds()),
+		MCPConfigPath:  mcpConfigPath,
 	}
 
 	logEvent(logFile, "run_started", map[string]any{
@@ -640,12 +666,21 @@ func (s *Supervisor) executeReview(ctx context.Context, req RunRequest) *Result 
 	defer cancel()
 
 	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
+
+	mcpConfigPath, mcpCleanup, err := writeMCPConfig(ctx, req.TokenSource)
+	if err != nil {
+		s.recordReviewOutcome(ctx, req, false, err.Error())
+		return s.fail(run, fmt.Errorf("write MCP config: %w", err))
+	}
+	defer mcpCleanup()
+
 	rc := provider.RunContext{
 		RepoPath:       s.cfg.RepoRoot,
 		TaskFile:       taskFile,
 		Env:            env,
 		LogWriter:      logWriter,
 		TimeoutSeconds: int(timeout.Seconds()),
+		MCPConfigPath:  mcpConfigPath,
 	}
 
 	logEvent(logFile, "run_started", map[string]any{
@@ -761,12 +796,22 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 	defer cancel()
 
 	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
+
+	mcpConfigPath, mcpCleanup, err := writeMCPConfig(ctx, req.TokenSource)
+	if err != nil {
+		s.cleanup(run)
+		s.recordReviewOutcome(ctx, req, false, err.Error())
+		return s.fail(run, fmt.Errorf("write MCP config: %w", err))
+	}
+	defer mcpCleanup()
+
 	rc := provider.RunContext{
 		RepoPath:       worktreePath,
 		TaskFile:       taskFile,
 		Env:            env,
 		LogWriter:      logWriter,
 		TimeoutSeconds: int(timeout.Seconds()),
+		MCPConfigPath:  mcpConfigPath,
 	}
 
 	logEvent(logFile, "run_started", map[string]any{
@@ -1001,6 +1046,57 @@ func findWorktreeForBranch(porcelain, branch string) string {
 		}
 	}
 	return ""
+}
+
+// writeMCPConfig writes a temporary MCP config JSON file pointing to the
+// github-mcp-server binary with the given token. Returns the path to the
+// config file and a cleanup function. Returns ("", nil, nil) when TokenSource
+// is nil or the token cannot be obtained (non-fatal: agent runs without MCP).
+func writeMCPConfig(ctx context.Context, ts TokenSource) (path string, cleanup func(), err error) {
+	if ts == nil {
+		return "", func() {}, nil
+	}
+	token, err := ts.Token(ctx)
+	if err != nil {
+		charmlog.Warn("could not obtain GitHub token for MCP server; running without MCP", "error", err)
+		return "", func() {}, nil
+	}
+	if token == "" {
+		return "", func() {}, nil
+	}
+
+	type mcpServer struct {
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+	}
+	config := map[string]map[string]mcpServer{
+		"mcpServers": {
+			"github": {
+				Command: "github-mcp-server",
+				Args:    []string{"stdio"},
+				Env:     map[string]string{"GITHUB_TOKEN": token},
+			},
+		},
+	}
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "", func() {}, fmt.Errorf("marshal MCP config: %w", err)
+	}
+
+	f, err := os.CreateTemp("", "ariadne-mcp-*.json")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create MCP config file: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name()) //nolint:errcheck
+		return "", func() {}, fmt.Errorf("write MCP config file: %w", err)
+	}
+	f.Close()
+
+	return f.Name(), func() { os.Remove(f.Name()) }, nil //nolint:errcheck
 }
 
 // loadRebaseWorkflow reads .ariadne/REBASE_WORKFLOW.md from the repo root.

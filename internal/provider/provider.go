@@ -28,6 +28,9 @@ type RunContext struct {
 	LogWriter io.Writer
 	// TimeoutSeconds is the wall-clock timeout for the run.
 	TimeoutSeconds int
+	// MCPConfigPath is the path to a temporary MCP config JSON file pointing to
+	// the github-mcp-server process. Empty string means no MCP server was started.
+	MCPConfigPath string
 }
 
 // RunHandle represents a running provider subprocess.

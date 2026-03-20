@@ -41,6 +41,12 @@ type GitHubSource struct {
 	repo           string
 	labelFilter    []string
 	allowedAuthors []string // empty = allow all
+	// tokenSource returns a fresh GitHub token. Non-nil when using GitHub App auth.
+	tokenSource interface {
+		Token(ctx context.Context) (string, error)
+	}
+	// staticToken is used when tokenSource is nil (PAT auth).
+	staticToken string
 }
 
 // NewGitHubSource creates a GitHubSource authenticated with the given token.
@@ -70,21 +76,39 @@ func NewGitHubSource(token, repo string, labelFilter []string, allowedAuthors []
 		}
 		itr := ghinstallation.NewFromAppsTransport(atr, inst.GetID())
 		tc = &http.Client{Transport: itr}
-	} else {
-		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-		tc = oauth2.NewClient(context.Background(), ts)
+		return &GitHubSource{
+			client:         gh.NewClient(tc),
+			owner:          owner,
+			repo:           repoName,
+			labelFilter:    labelFilter,
+			allowedAuthors: allowedAuthors,
+			tokenSource:    itr,
+		}, nil
 	}
 
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc = oauth2.NewClient(context.Background(), ts)
 	return &GitHubSource{
 		client:         gh.NewClient(tc),
 		owner:          owner,
 		repo:           repoName,
 		labelFilter:    labelFilter,
 		allowedAuthors: allowedAuthors,
+		staticToken:    token,
 	}, nil
 }
 
 func (s *GitHubSource) Name() string { return "github" }
+
+// Token returns a valid GitHub API token. When using GitHub App auth the
+// installation transport handles refresh automatically. Falls back to the
+// static PAT when not using App auth.
+func (s *GitHubSource) Token(ctx context.Context) (string, error) {
+	if s.tokenSource != nil {
+		return s.tokenSource.Token(ctx)
+	}
+	return s.staticToken, nil
+}
 
 // Poll fetches open issues that have all required labels but have NOT been claimed yet.
 func (s *GitHubSource) Poll(ctx context.Context) ([]*domain.Task, error) {
