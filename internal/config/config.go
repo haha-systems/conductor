@@ -73,17 +73,15 @@ type PersonaConfig struct {
 	Name           string // populated from directory name
 	Provider       string `toml:"provider"` // from persona.toml, optional
 	Dir            string // absolute path to persona directory
-	DisplayName    string // from persona.toml "name" — used as git author name
-	Email          string // from persona.toml "email" — used as git author email
-	GitHubTokenEnv string // env var name holding the persona's GitHub PAT
+	DisplayName string // from persona.toml "name" — used as git author name
+	Email       string // from persona.toml "email" — used as git author email
 }
 
 // personaTOML holds the optional persona.toml fields.
 type personaTOML struct {
-	Provider       string `toml:"provider"`
-	Name           string `toml:"name"`
-	Email          string `toml:"email"`
-	GitHubTokenEnv string `toml:"github_token_env"`
+	Provider string `toml:"provider"`
+	Name     string `toml:"name"`
+	Email    string `toml:"email"`
 }
 
 // Load reads and parses a conductor.toml file, applying defaults.
@@ -181,7 +179,6 @@ func discoverPersonas(repoRoot string) map[string]PersonaConfig {
 				p.Provider = pt.Provider
 				p.DisplayName = pt.Name
 				p.Email = pt.Email
-				p.GitHubTokenEnv = pt.GitHubTokenEnv
 			}
 		}
 

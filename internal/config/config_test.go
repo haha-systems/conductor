@@ -182,7 +182,6 @@ func TestDiscoverPersonas_NewFields(t *testing.T) {
 	toml := `provider = "claude"
 name = "Alex"
 email = "alex@haha-systems.bot"
-github_token_env = "GITHUB_TOKEN_LEAD_ENGINEER"
 `
 	os.WriteFile(filepath.Join(pDir, "persona.toml"), []byte(toml), 0644) //nolint:errcheck
 
@@ -196,9 +195,6 @@ github_token_env = "GITHUB_TOKEN_LEAD_ENGINEER"
 	}
 	if p.Email != "alex@haha-systems.bot" {
 		t.Errorf("expected Email=alex@haha-systems.bot, got %q", p.Email)
-	}
-	if p.GitHubTokenEnv != "GITHUB_TOKEN_LEAD_ENGINEER" {
-		t.Errorf("expected GitHubTokenEnv=GITHUB_TOKEN_LEAD_ENGINEER, got %q", p.GitHubTokenEnv)
 	}
 }
 
@@ -215,7 +211,7 @@ func TestDiscoverPersonas_NoToml_EmptyNewFields(t *testing.T) {
 	if !ok {
 		t.Fatal("expected no-toml persona")
 	}
-	if p.DisplayName != "" || p.Email != "" || p.GitHubTokenEnv != "" {
+	if p.DisplayName != "" || p.Email != "" {
 		t.Errorf("expected empty new fields for persona with no toml, got %+v", p)
 	}
 }

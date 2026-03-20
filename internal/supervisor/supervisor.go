@@ -144,8 +144,8 @@ func (s *Supervisor) Execute(ctx context.Context, req RunRequest) *Result {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 6. Build env: merge global + per-task + persona.
-	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task), personaEnv(req.Persona))
+	// 6. Build env: merge global + per-task.
+	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
 
 	rc := provider.RunContext{
 		RepoPath:       worktreePath,
@@ -305,17 +305,6 @@ func mergeEnv(maps ...map[string]string) map[string]string {
 		}
 	}
 	return merged
-}
-
-func personaEnv(persona *config.PersonaConfig) map[string]string {
-	env := map[string]string{}
-	if persona == nil || persona.GitHubTokenEnv == "" {
-		return env
-	}
-	if token := os.Getenv(persona.GitHubTokenEnv); token != "" {
-		env["GITHUB_TOKEN"] = token
-	}
-	return env
 }
 
 func configureGitAuthor(worktreePath string, persona *config.PersonaConfig) error {
@@ -777,7 +766,7 @@ func (s *Supervisor) executeRevise(ctx context.Context, req RunRequest) *Result 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task), personaEnv(req.Persona))
+	env := mergeEnv(req.GlobalEnv, taskEnv(req.Task))
 	rc := provider.RunContext{
 		RepoPath:       worktreePath,
 		TaskFile:       taskFile,

@@ -357,39 +357,6 @@ func TestExtractRepoSlug(t *testing.T) {
 	}
 }
 
-func TestPersonaEnv_WithToken(t *testing.T) {
-	t.Setenv("MY_PERSONA_TOKEN", "tok-abc123")
-	persona := &config.PersonaConfig{GitHubTokenEnv: "MY_PERSONA_TOKEN"}
-	env := personaEnv(persona)
-	if env["GITHUB_TOKEN"] != "tok-abc123" {
-		t.Errorf("expected GITHUB_TOKEN=tok-abc123, got %q", env["GITHUB_TOKEN"])
-	}
-}
-
-func TestPersonaEnv_NoGitHubTokenEnv(t *testing.T) {
-	persona := &config.PersonaConfig{Name: "lead-engineer"}
-	env := personaEnv(persona)
-	if len(env) != 0 {
-		t.Errorf("expected empty env when GitHubTokenEnv unset, got %v", env)
-	}
-}
-
-func TestPersonaEnv_NilPersona(t *testing.T) {
-	env := personaEnv(nil)
-	if len(env) != 0 {
-		t.Errorf("expected empty env for nil persona, got %v", env)
-	}
-}
-
-func TestPersonaEnv_EnvVarNotSet(t *testing.T) {
-	os.Unsetenv("UNSET_PERSONA_TOKEN") //nolint:errcheck
-	persona := &config.PersonaConfig{GitHubTokenEnv: "UNSET_PERSONA_TOKEN"}
-	env := personaEnv(persona)
-	if _, ok := env["GITHUB_TOKEN"]; ok {
-		t.Error("expected no GITHUB_TOKEN when env var is unset")
-	}
-}
-
 func TestConfigureGitAuthor_SetsNameAndEmail(t *testing.T) {
 	dir := t.TempDir()
 	// Initialize a real git repo so git config works.
