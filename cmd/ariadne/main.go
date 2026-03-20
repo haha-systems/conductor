@@ -463,8 +463,9 @@ func buildProviders(cfg *config.Config) map[string]provider.AgentProvider {
 func buildWorkSource(cfg *config.Config) (worksource.WorkSource, error) {
 	if cfg.WorkSources.GitHub != nil {
 		token := os.Getenv("GITHUB_TOKEN")
-		if token == "" {
-			return nil, fmt.Errorf("GITHUB_TOKEN env var required for GitHub work source")
+		appID, keyPath := os.Getenv("GH_APP_APP_ID"), os.Getenv("GH_APP_PRIVATE_KEY_PATH")
+		if token == "" && (appID == "" || keyPath == "") {
+			return nil, fmt.Errorf("GitHub auth required: set GITHUB_TOKEN, or both GH_APP_APP_ID and GH_APP_PRIVATE_KEY_PATH")
 		}
 		return worksource.NewGitHubSource(token, cfg.WorkSources.GitHub.Repo, cfg.WorkSources.GitHub.LabelFilter, cfg.WorkSources.GitHub.AllowedAuthors)
 	}
