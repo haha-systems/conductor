@@ -8,3 +8,4 @@ node_modules
 .ariadne-review-*.md
 run.jsonl
 ariadne.toml
+*.pem

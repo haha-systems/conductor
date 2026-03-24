@@ -1,7 +1,0 @@
-{"event":"run_started","provider":"gemini","run_id":"run_1773980607650162000","task_id":"63","timestamp":"2026-03-20T04:23:27.793077Z"}
-{"event":"provider_stdout","line":"YOLO mode is enabled. All tool calls will be automatically approved.","timestamp":"2026-03-20T04:23:32.279396Z"}
-{"event":"provider_stdout","line":"Loaded cached credentials.","timestamp":"2026-03-20T04:23:32.279446Z"}
-{"event":"provider_stdout","line":"YOLO mode is enabled. All tool calls will be automatically approved.","timestamp":"2026-03-20T04:23:32.279453Z"}
-{"event":"provider_stdout","line":"Loading extension: gemini-cli-ralph","timestamp":"2026-03-20T04:23:32.279456Z"}
-{"event":"provider_stdout","line":"I will now sync the repository by fetching from the origin and rebasing the current branch on top of `origin/main`. This ensures the local worktree is up-to-date with the latest changes.","timestamp":"2026-03-20T04:23:47.081088Z"}
-{"event":"provider_stdout","line":"The rebase failed due to an unstaged file. I will stash the local changes, sync with the remote repository, and then restore my stashed changes to proceed.","timestamp":"2026-03-20T04:23:49.928597Z"}
